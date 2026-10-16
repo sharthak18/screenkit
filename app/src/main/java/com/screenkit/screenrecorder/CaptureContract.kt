@@ -19,11 +19,14 @@ object CaptureContract {
     const val EXTRA_CAMERA_FRONT = "screenkit.camera_front"
     const val EXTRA_SHOW_CAMERA_OVERLAY = "screenkit.show_camera_overlay"
     const val EXTRA_OVERLAY_COMMAND = "screenkit.overlay_command"
+    const val EXTRA_SHOW_TOUCHES = "screenkit.show_touches"
+    const val EXTRA_WEB_URL = "screenkit.web_url"
 
     const val ACTION_SCREEN_STATE = "com.screenkit.screenrecorder.SCREEN_STATE"
     const val ACTION_SCREEN_FINISHED = "com.screenkit.screenrecorder.SCREEN_FINISHED"
     const val ACTION_CAMERA_STATE = "com.screenkit.screenrecorder.CAMERA_STATE"
     const val ACTION_CAMERA_FINISHED = "com.screenkit.screenrecorder.CAMERA_FINISHED"
+    const val ACTION_TOUCH_STATE = "com.screenkit.screenrecorder.TOUCH_STATE"
 
     /** Overlay bubble actions. Each one runs without bringing the main app to the front. */
     const val COMMAND_SCREENSHOT = "screenshot"
@@ -38,6 +41,8 @@ object CaptureContract {
     const val COMMAND_PARTIAL_SCREENSHOT = "partial_screenshot"
     const val COMMAND_PARTIAL_SCREEN_RECORDING = "partial_screen_recording"
     const val COMMAND_OPEN_BRUSH = "open_brush"
+    const val COMMAND_TOGGLE_TOUCHES = "toggle_touches"
+    const val COMMAND_OPEN_WEB_BYPASS = "open_web_bypass"
 
     /** Broadcast actions to coordinate overlay visibility during screenshot capture */
     const val ACTION_TEMPORARY_HIDE_OVERLAY = "com.screenkit.screenrecorder.overlay.TEMP_HIDE"
@@ -58,8 +63,10 @@ object CaptureContract {
     const val EXTRA_CROP_RIGHT = "screenkit.crop_right"
     const val EXTRA_CROP_BOTTOM = "screenkit.crop_bottom"
 
-    const val PREF_SHOW_TOUCHES = "show_touches"
     const val PREFS_NAME = "screenkit_settings"
+    const val PREF_SHOW_TOUCHES = "show_touches"
+    const val PREF_HW_GL_BYPASS = "hw_gl_bypass"
+    const val PREF_LAST_WEB_URL = "last_web_url"
     const val PREF_MICROPHONE_ENABLED = "microphone_enabled"
     const val PREF_AUDIO_MODE = "audio_mode"
     const val PREF_CAMERA_FRONT = "camera_front"

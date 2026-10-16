@@ -1,5 +1,6 @@
 package com.screenkit.screenrecorder.services
 
+import android.graphics.Bitmap
 import android.graphics.RectF
 import android.opengl.EGL14
 import android.opengl.EGLConfig
@@ -17,10 +18,11 @@ import java.nio.FloatBuffer
 
 /**
  * Renders frames from an external source (e.g. MediaProjection VirtualDisplay via SurfaceTexture)
- * into a target encoder input Surface, applying sub-region crop if requested.
+ * into a target encoder input Surface (or offscreen EGL Pbuffer for hardware GL screenshot readback),
+ * applying sub-region crop if requested.
  */
 class CropSurfaceRenderer(
-    private val inputSurface: Surface,
+    private val inputSurface: Surface?,
     private val outputWidth: Int,
     private val outputHeight: Int,
     private val cropRect: RectF? = null,
@@ -101,6 +103,10 @@ class CropSurfaceRenderer(
             }
 
         Matrix.setIdentityM(mvpMatrix, 0)
+        if (inputSurface == null) {
+            // Flip Y for offscreen Pbuffer so glReadPixels matches top-down Android Bitmap layout
+            Matrix.scaleM(mvpMatrix, 0, 1f, -1f, 1f)
+        }
         setupEgl()
         setupGl()
     }
@@ -115,19 +121,33 @@ class CropSurfaceRenderer(
             throw RuntimeException("unable to initialize EGL14")
         }
 
-        val attribList = intArrayOf(
-            EGL14.EGL_RED_SIZE, 8,
-            EGL14.EGL_GREEN_SIZE, 8,
-            EGL14.EGL_BLUE_SIZE, 8,
-            EGL14.EGL_ALPHA_SIZE, 8,
-            EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
-            EGL_RECORDABLE_ANDROID, 1,
-            EGL14.EGL_NONE,
-        )
+        val surfaceTypeBit = if (inputSurface != null) EGL14.EGL_WINDOW_BIT else EGL14.EGL_PBUFFER_BIT
+        val attribList = if (inputSurface != null) {
+            intArrayOf(
+                EGL14.EGL_RED_SIZE, 8,
+                EGL14.EGL_GREEN_SIZE, 8,
+                EGL14.EGL_BLUE_SIZE, 8,
+                EGL14.EGL_ALPHA_SIZE, 8,
+                EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
+                EGL14.EGL_SURFACE_TYPE, surfaceTypeBit,
+                EGL_RECORDABLE_ANDROID, 1,
+                EGL14.EGL_NONE,
+            )
+        } else {
+            intArrayOf(
+                EGL14.EGL_RED_SIZE, 8,
+                EGL14.EGL_GREEN_SIZE, 8,
+                EGL14.EGL_BLUE_SIZE, 8,
+                EGL14.EGL_ALPHA_SIZE, 8,
+                EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
+                EGL14.EGL_SURFACE_TYPE, surfaceTypeBit,
+                EGL14.EGL_NONE,
+            )
+        }
+
         val configs = arrayOfNulls<EGLConfig>(1)
         val numConfigs = IntArray(1)
         if (!EGL14.eglChooseConfig(eglDisplay, attribList, 0, configs, 0, configs.size, numConfigs, 0) || numConfigs[0] == 0) {
-            // Retry without EGL_RECORDABLE_ANDROID in case device does not support the extension token
             val fallbackAttribs = intArrayOf(
                 EGL14.EGL_RED_SIZE, 8,
                 EGL14.EGL_GREEN_SIZE, 8,
@@ -151,10 +171,19 @@ class CropSurfaceRenderer(
             throw RuntimeException("failed to create EGL context")
         }
 
-        val surfaceAttribs = intArrayOf(EGL14.EGL_NONE)
-        eglSurface = EGL14.eglCreateWindowSurface(eglDisplay, config, inputSurface, surfaceAttribs, 0)
+        eglSurface = if (inputSurface != null) {
+            val surfaceAttribs = intArrayOf(EGL14.EGL_NONE)
+            EGL14.eglCreateWindowSurface(eglDisplay, config, inputSurface, surfaceAttribs, 0)
+        } else {
+            val pbufferAttribs = intArrayOf(
+                EGL14.EGL_WIDTH, outputWidth,
+                EGL14.EGL_HEIGHT, outputHeight,
+                EGL14.EGL_NONE,
+            )
+            EGL14.eglCreatePbufferSurface(eglDisplay, config, pbufferAttribs, 0)
+        }
         if (eglSurface == EGL14.EGL_NO_SURFACE) {
-            throw RuntimeException("failed to create EGL window surface")
+            throw RuntimeException("failed to create EGL surface")
         }
 
         makeCurrent()
@@ -217,7 +246,7 @@ class CropSurfaceRenderer(
     }
 
     /**
-     * Draws the frame from [textureId] into the encoder surface, mapping [cropRect] to full viewport.
+     * Draws the frame from [textureId] into the target surface, mapping [cropRect] to full viewport.
      */
     fun drawFrame(textureId: Int, surfaceTextureTransform: FloatArray, timestampNanos: Long) {
         makeCurrent()
@@ -227,15 +256,14 @@ class CropSurfaceRenderer(
 
         GLES20.glUseProgram(programHandle)
 
-        // Calculate texture transform:
-        // Copy SurfaceTexture's transform matrix
         System.arraycopy(surfaceTextureTransform, 0, stMatrix, 0, 16)
 
         if (cropRect != null) {
-            // Apply crop sub-rectangle in UV space
+            // Apply crop sub-rectangle in UV space (screen top=0..bottom=1 -> GL bottom=1-bottom)
             val cropMatrix = FloatArray(16)
             Matrix.setIdentityM(cropMatrix, 0)
-            Matrix.translateM(cropMatrix, 0, cropRect.left, cropRect.top, 0f)
+            val glBottom = (1f - cropRect.bottom).coerceIn(0f, 1f)
+            Matrix.translateM(cropMatrix, 0, cropRect.left, glBottom, 0f)
             Matrix.scaleM(cropMatrix, 0, cropRect.width(), cropRect.height(), 1f)
             Matrix.multiplyMM(adjustedTexMatrix, 0, stMatrix, 0, cropMatrix, 0)
         } else {
@@ -261,8 +289,26 @@ class CropSurfaceRenderer(
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0)
         GLES20.glUseProgram(0)
 
-        EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, timestampNanos)
-        EGL14.eglSwapBuffers(eglDisplay, eglSurface)
+        if (inputSurface != null) {
+            EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, timestampNanos)
+            EGL14.eglSwapBuffers(eglDisplay, eglSurface)
+        } else {
+            GLES20.glFinish()
+        }
+    }
+
+    /**
+     * Reads the currently rendered GL viewport into an ARGB_8888 Bitmap.
+     */
+    fun readPixelsBitmap(): Bitmap {
+        makeCurrent()
+        val buf = ByteBuffer.allocateDirect(outputWidth * outputHeight * 4)
+            .order(ByteOrder.nativeOrder())
+        GLES20.glReadPixels(0, 0, outputWidth, outputHeight, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, buf)
+        buf.rewind()
+        val bitmap = Bitmap.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
+        bitmap.copyPixelsFromBuffer(buf)
+        return bitmap
     }
 
     fun release() {

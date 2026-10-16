@@ -9,9 +9,12 @@ import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.media.MediaRecorder
+import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.NoiseSuppressor
 import android.media.projection.MediaProjection
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.os.Process
 import android.os.SystemClock
 import android.view.Surface
 import androidx.annotation.RequiresApi
@@ -19,18 +22,16 @@ import com.screenkit.screenrecorder.data.CaptureAudioMode
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.util.Arrays
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.abs
 
 /**
- * H.264 + AAC screen recorder built directly on MediaCodec and MediaMuxer.
+ * H.264 + AAC screen recorder built on MediaCodec and MediaMuxer.
  *
- * MediaRecorder cannot mix an audio stream it did not create, and AudioPlaybackCapture (the only
- * supported way to record the sound a phone is playing) hands back raw PCM. So when the user asks
- * for device audio, or device audio plus mic, ScreenKit records the display into an encoder input
- * surface and encodes the mixed PCM itself. Microphone-only and silent recordings keep using the
- * simpler MediaRecorder path in ScreenCaptureService.
+ * Handles Microphone (with 4.0x +12 dB pre-amp gain & soft-knee limiter), Device Audio
+ * (via AudioPlaybackCapture), and Mixed (Mic + Device Audio) at 48 kHz.
  */
 internal class ScreenRecorderEngine(
     private val width: Int,
@@ -43,21 +44,24 @@ internal class ScreenRecorderEngine(
     private val file: File?,
     private val onAudioUnavailable: (String) -> Unit,
 ) {
-    private class PcmChunk(val samples: ShortArray, val capturedAtNanos: Long)
-
     private class CaptureSource(
         val record: AudioRecord,
-        val queue: LinkedBlockingQueue<PcmChunk>,
-        val thread: Thread,
+        val queue: LinkedBlockingQueue<ShortArray>,
+        val isMicrophone: Boolean,
+        var thread: Thread? = null,
+        var agc: AutomaticGainControl? = null,
+        var ns: NoiseSuppressor? = null,
     )
 
-    /** MediaMuxer only accepts direct buffers, so a default encoder buffer is copied here. */
+    /** MediaMuxer only accepts direct buffers, so early encoder buffers are stashed here. */
     private class StashedSample(val buffer: ByteBuffer, val size: Int, val ptsUs: Long, val flags: Int)
 
     private val captureActive = AtomicBoolean(false)
     private val released = AtomicBoolean(false)
     private val muxerLock = Any()
     private val audioSources = mutableListOf<CaptureSource>()
+    private var micSource: CaptureSource? = null
+    private var deviceSource: CaptureSource? = null
     private val videoStash = ArrayDeque<StashedSample>()
     private val audioStash = ArrayDeque<StashedSample>()
 
@@ -68,29 +72,37 @@ internal class ScreenRecorderEngine(
     @Volatile private var audioTrackIndex = -1
     @Volatile private var muxerStarted = false
     @Volatile private var wroteVideoSample = false
+    @Volatile private var totalAudioSamplesFed = 0L
     @Volatile private var lastAudioInputPtsUs = 0L
     private var muxer: MediaMuxer? = null
     private var inputSurface: Surface? = null
     private var videoDrain: Thread? = null
     private var audioDrain: Thread? = null
     private var mixerThread: Thread? = null
-    private var baseUs = 0L
     private var sessionStartElapsed = 0L
     private var drainDeadline = 0L
-    private var clockMode = CLOCK_UNKNOWN
     private var firstVideoRawUs = -1L
     private var firstAudioRawUs = -1L
+    private var lastVideoPtsUs = -1L
+    private var lastAudioPtsUs = -1L
+    private var prepared = false
 
     /** Surface the caller feeds the display into. */
     val surface: Surface get() = inputSurface ?: error("The encoder surface is not ready.")
 
-    fun start() {
+    /**
+     * Prepares the video encoder and its input surface so the caller can attach VirtualDisplay
+     * before audio capture and encoding threads begin.
+     */
+    fun prepare() {
+        if (prepared) return
         val videoFormat = MediaFormat.createVideoFormat(VIDEO_MIME, width, height).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
             setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
             setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
+            setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100_000L)
         }
         val video = MediaCodec.createEncoderByType(VIDEO_MIME)
         video.configure(videoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
@@ -100,28 +112,37 @@ internal class ScreenRecorderEngine(
         inputSurface = createdSurface
 
         muxer = createMuxer() ?: throw IllegalStateException("Could not open the recording output.")
-        baseUs = System.nanoTime() / 1_000L
+        prepared = true
+    }
+
+    fun start() {
+        if (!prepared) prepare()
+        val video = videoCodec ?: error("Video encoder was not prepared.")
         sessionStartElapsed = SystemClock.elapsedRealtime()
+
+        // IMPORTANT: Set captureActive = true BEFORE starting audio capture threads so reader
+        // threads never see captureActive == false on startup!
+        captureActive.set(true)
 
         startAudioCapture()
 
-        captureActive.set(true)
         videoDrain = drainLoop(video, isVideo = true).also { it.start() }
-        audioCodec?.let { codec -> audioDrain = drainLoop(codec, isVideo = false).also { it.start() } }
+        audioCodec?.let { codec ->
+            audioDrain = drainLoop(codec, isVideo = false).also { it.start() }
+        }
         if (audioSources.isNotEmpty()) {
             mixerThread = mixerLoop().also { it.start() }
         }
     }
 
     /**
-     * Finishes the file. Returns true when a playable recording was written; false when the muxer
-     * never received enough data (for example a recording stopped a moment after it began).
+     * Finishes the file. Returns true when a playable recording was written.
      */
     fun stop(): Boolean {
         captureActive.set(false)
         audioSources.forEach { source -> runCatching { source.record.stop() } }
-        audioSources.forEach { source -> runCatching { source.thread.join(400L) } }
-        mixerThread?.let { thread -> runCatching { thread.join(700L) } }
+        audioSources.forEach { source -> runCatching { source.thread?.join(500L) } }
+        mixerThread?.let { thread -> runCatching { thread.join(800L) } }
 
         drainDeadline = SystemClock.elapsedRealtime() + 2_500L
         signalAudioEndOfStream()
@@ -177,7 +198,7 @@ internal class ScreenRecorderEngine(
 
         val format = MediaFormat.createAudioFormat(AUDIO_MIME, SAMPLE_RATE, CHANNEL_COUNT).apply {
             setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
-            setInteger(MediaFormat.KEY_BIT_RATE, 96_000)
+            setInteger(MediaFormat.KEY_BIT_RATE, 128_000)
             setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16 * 1_024)
         }
         val codec = runCatching {
@@ -194,17 +215,28 @@ internal class ScreenRecorderEngine(
         val wantsMicrophone = audioMode.usesMicrophone
         val wantsDevice = audioMode.usesDeviceAudio
         val canUseDevice = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
-        val microphone = if (wantsMicrophone) startSource(openMicrophone()) else null
+
+        // Open device audio first on the active MediaProjection, then open the microphone so both
+        // AudioRecord sessions coexist cleanly on Android 10–15.
         val device = if (wantsDevice && canUseDevice && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startSource(openDeviceAudio())
+            openAndStartDeviceAudio()
         } else {
             null
         }
+        val microphone = if (wantsMicrophone) {
+            openAndStartMicrophone()
+        } else {
+            null
+        }
+
+        deviceSource = device
+        micSource = microphone
+
         if (wantsMicrophone && microphone == null) {
             onAudioUnavailable("The microphone could not be opened, so it is missing from this recording.")
         }
         if (wantsDevice && device == null) {
-            onAudioUnavailable("Device audio was refused: the app on screen blocks capture, or audio was not included in Android's screen-share consent.")
+            onAudioUnavailable("Device audio was unavailable for this session.")
         }
         if (microphone == null && device == null) {
             runCatching { codec.stop() }
@@ -217,47 +249,119 @@ internal class ScreenRecorderEngine(
         audioCodec = codec
     }
 
-    private fun startSource(record: AudioRecord?): CaptureSource? {
-        if (record == null) return null
+    private fun openAndStartMicrophone(): CaptureSource? {
+        val candidateSources = intArrayOf(
+            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            MediaRecorder.AudioSource.CAMCORDER,
+            MediaRecorder.AudioSource.DEFAULT,
+        )
+        val minimum = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_MASK, ENCODING).coerceAtLeast(4096)
+        val bufferBytes = maxOf(minimum * 2, 16 * 1_024)
+
+        for (audioSource in candidateSources) {
+            val record = runCatching {
+                AudioRecord.Builder()
+                    .setAudioSource(audioSource)
+                    .setAudioFormat(pcmFormat())
+                    .setBufferSizeInBytes(bufferBytes)
+                    .build()
+            }.getOrNull() ?: continue
+
+            if (record.state != AudioRecord.STATE_INITIALIZED) {
+                runCatching { record.release() }
+                continue
+            }
+
+            val started = runCatching {
+                record.startRecording()
+                record.recordingState == AudioRecord.RECORDSTATE_RECORDING
+            }.getOrDefault(false)
+
+            if (!started) {
+                runCatching { record.release() }
+                continue
+            }
+
+            val agc = runCatching {
+                if (AutomaticGainControl.isAvailable()) {
+                    AutomaticGainControl.create(record.audioSessionId)?.apply { enabled = true }
+                } else null
+            }.getOrNull()
+
+            val ns = runCatching {
+                if (NoiseSuppressor.isAvailable()) {
+                    NoiseSuppressor.create(record.audioSessionId)?.apply { enabled = true }
+                } else null
+            }.getOrNull()
+
+            val queue = LinkedBlockingQueue<ShortArray>(64)
+            val source = CaptureSource(
+                record = record,
+                queue = queue,
+                isMicrophone = true,
+                agc = agc,
+                ns = ns,
+            )
+            val readerThread = Thread({ readSource(source) }, "ScreenKitMicReader").apply {
+                isDaemon = true
+            }
+            source.thread = readerThread
+            audioSources += source
+            readerThread.start()
+            return source
+        }
+        return null
+    }
+
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private fun openAndStartDeviceAudio(): CaptureSource? {
+        val configuration = runCatching {
+            AudioPlaybackCaptureConfiguration.Builder(projection)
+                .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
+                .addMatchingUsage(AudioAttributes.USAGE_GAME)
+                .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+                .build()
+        }.getOrNull() ?: return null
+
+        val minimum = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_MASK, ENCODING).coerceAtLeast(4096)
+        val record = runCatching {
+            AudioRecord.Builder()
+                .setAudioFormat(pcmFormat())
+                .setAudioPlaybackCaptureConfig(configuration)
+                .setBufferSizeInBytes(maxOf(minimum * 2, 32 * 1_024))
+                .build()
+        }.getOrNull() ?: return null
+
+        if (record.state != AudioRecord.STATE_INITIALIZED) {
+            runCatching { record.release() }
+            return null
+        }
+
         val started = runCatching {
             record.startRecording()
             record.recordingState == AudioRecord.RECORDSTATE_RECORDING
         }.getOrDefault(false)
+
         if (!started) {
             runCatching { record.release() }
             return null
         }
-        val queue = LinkedBlockingQueue<PcmChunk>(48)
-        val thread = Thread({ readSource(record, queue) }, "ScreenKitAudioReader").apply { isDaemon = true }
-        val source = CaptureSource(record, queue, thread)
+
+        val queue = LinkedBlockingQueue<ShortArray>(64)
+        val source = CaptureSource(
+            record = record,
+            queue = queue,
+            isMicrophone = false,
+        )
+        val readerThread = Thread({ readSource(source) }, "ScreenKitDeviceAudioReader").apply {
+            isDaemon = true
+        }
+        source.thread = readerThread
         audioSources += source
-        thread.start()
+        readerThread.start()
         return source
     }
-
-    private fun openMicrophone(): AudioRecord? = runCatching {
-        val minimum = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_MASK, ENCODING)
-        AudioRecord.Builder()
-            .setAudioSource(MediaRecorder.AudioSource.CAMCORDER)
-            .setAudioFormat(pcmFormat())
-            .setBufferSizeInBytes(maxOf(minimum, 8 * 1_024) * 2)
-            .build()
-    }.getOrNull()?.takeIf { it.state == AudioRecord.STATE_INITIALIZED } ?: null
-
-    @RequiresApi(Build.VERSION_CODES.Q)
-    private fun openDeviceAudio(): AudioRecord? = runCatching {
-        val configuration = AudioPlaybackCaptureConfiguration.Builder(projection)
-            .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
-            .addMatchingUsage(AudioAttributes.USAGE_GAME)
-            .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
-            .build()
-        val minimum = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_MASK, ENCODING)
-        AudioRecord.Builder()
-            .setAudioFormat(pcmFormat())
-            .setAudioPlaybackCaptureConfig(configuration)
-            .setBufferSizeInBytes(maxOf(minimum, 16 * 1_024) * 2)
-            .build()
-    }.getOrNull()?.takeIf { it.state == AudioRecord.STATE_INITIALIZED } ?: null
 
     private fun pcmFormat(): AudioFormat = AudioFormat.Builder()
         .setEncoding(ENCODING)
@@ -265,67 +369,164 @@ internal class ScreenRecorderEngine(
         .setChannelMask(CHANNEL_MASK)
         .build()
 
-    // ------------------------------------------------------------------ audio threads
+    // ------------------------------------------------------------------ audio threads & DSP amplification
 
-    private fun readSource(record: AudioRecord, queue: LinkedBlockingQueue<PcmChunk>) {
-        val samples = ShortArray(SAMPLES_PER_CHUNK)
+    private fun readSource(source: CaptureSource) {
+        runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO) }
+        val record = source.record
+        val queue = source.queue
+        val isMic = source.isMicrophone
+        var chunk = ShortArray(SAMPLES_PER_CHUNK)
+        var offset = 0
+
         while (captureActive.get()) {
-            val started = System.nanoTime()
-            val read = runCatching { record.read(samples, 0, samples.size) }.getOrDefault(-1)
-            val finished = System.nanoTime()
+            val read = runCatching {
+                record.read(chunk, offset, SAMPLES_PER_CHUNK - offset)
+            }.getOrDefault(-1)
+
             if (read < 0) break
-            if (read == 0) continue
-            val chunk = PcmChunk(samples.copyOf(read), (started + finished) / 2)
-            if (!queue.offer(chunk)) {
-                queue.poll()
-                queue.offer(chunk)
+            if (read == 0) {
+                runCatching { Thread.sleep(2L) }
+                continue
+            }
+
+            if (isMic) {
+                for (i in offset until (offset + read)) {
+                    chunk[i] = amplifyMicSample(chunk[i])
+                }
+            } else {
+                for (i in offset until (offset + read)) {
+                    chunk[i] = amplifyDeviceSample(chunk[i])
+                }
+            }
+
+            offset += read
+            if (offset >= SAMPLES_PER_CHUNK) {
+                if (!queue.offer(chunk)) {
+                    queue.poll()
+                    queue.offer(chunk)
+                }
+                chunk = ShortArray(SAMPLES_PER_CHUNK)
+                offset = 0
             }
         }
     }
 
+    /**
+     * Amplifies microphone input by 4.0x (+12 dB) with a smooth rational soft-knee limiter above
+     * 22,000 so voice commentary is loud and clear without harsh digital clipping.
+     */
+    private fun amplifyMicSample(sample: Short): Short {
+        val boosted = sample.toInt() * MIC_GAIN_MULTIPLIER
+        val absVal = abs(boosted)
+        val knee = 22_000f
+        val maxOut = 32_600f
+        val headroom = maxOut - knee
+        val shaped = if (absVal <= knee) {
+            absVal
+        } else {
+            val excess = (absVal - knee) / (headroom * 2.5f)
+            knee + headroom * (excess / (1f + excess))
+        }
+        val signed = if (boosted < 0f) -shaped else shaped
+        return signed.toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+    }
+
+    /**
+     * Gently boosts internal device audio (1.25x) with soft-knee limiting.
+     */
+    private fun amplifyDeviceSample(sample: Short): Short {
+        val boosted = sample.toInt() * 1.25f
+        val absVal = abs(boosted)
+        val knee = 25_000f
+        val maxOut = 32_600f
+        val headroom = maxOut - knee
+        val shaped = if (absVal <= knee) {
+            absVal
+        } else {
+            val excess = (absVal - knee) / (headroom * 2.0f)
+            knee + headroom * (excess / (1f + excess))
+        }
+        val signed = if (boosted < 0f) -shaped else shaped
+        return signed.toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+    }
+
+    /**
+     * Mixes an already-amplified microphone sample with a device audio sample using soft-knee
+     * anti-clipping saturation so both tracks remain clear.
+     */
+    private fun mixSamples(micSample: Short, deviceSample: Short): Short {
+        val combined = micSample.toInt() + (deviceSample.toInt() * 9) / 10
+        val absVal = abs(combined).toFloat()
+        val knee = 24_000f
+        val maxOut = 32_600f
+        val headroom = maxOut - knee
+        val shaped = if (absVal <= knee) {
+            absVal
+        } else {
+            val excess = (absVal - knee) / (headroom * 2.2f)
+            knee + headroom * (excess / (1f + excess))
+        }
+        val signed = if (combined < 0) -shaped else shaped
+        return signed.toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+    }
+
     private fun mixerLoop(): Thread = Thread({
+        runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO) }
         val mixed = ShortArray(SAMPLES_PER_CHUNK)
-        val sources = audioSources.toList()
+        val silent = ShortArray(SAMPLES_PER_CHUNK)
+        val mic = micSource
+        val dev = deviceSource
+
         while (captureActive.get() && !audioAbandoned) {
-            val chunks = arrayOfNulls<PcmChunk>(sources.size)
-            var anyChunk = false
-            for (index in sources.indices) {
-                val chunk = sources[index].queue.poll()
-                if (chunk != null) {
-                    chunks[index] = chunk
-                    anyChunk = true
+            val micChunk: ShortArray?
+            val devChunk: ShortArray?
+
+            if (mic != null && dev != null) {
+                // MIXED (Mic + Device): pace on hardware microphone (20ms per chunk) and mix
+                // device audio chunks when available.
+                micChunk = runCatching { mic.queue.poll(25L, TimeUnit.MILLISECONDS) }.getOrNull()
+                while (dev.queue.size > 4) {
+                    dev.queue.poll()
                 }
+                devChunk = if (micChunk != null) {
+                    dev.queue.poll() ?: runCatching { dev.queue.poll(2L, TimeUnit.MILLISECONDS) }.getOrNull()
+                } else {
+                    runCatching { dev.queue.poll(5L, TimeUnit.MILLISECONDS) }.getOrNull()
+                }
+            } else if (mic != null) {
+                micChunk = runCatching { mic.queue.poll(25L, TimeUnit.MILLISECONDS) }.getOrNull()
+                devChunk = null
+            } else if (dev != null) {
+                devChunk = runCatching { dev.queue.poll(22L, TimeUnit.MILLISECONDS) }.getOrNull()
+                micChunk = null
+            } else {
+                break
             }
-            if (!anyChunk) {
-                runCatching { Thread.sleep(4L) }
-                continue
-            }
-            var length = 0
-            var capturedAtNanos = Long.MAX_VALUE
-            for (chunk in chunks) {
-                if (chunk == null) continue
-                if (chunk.samples.size > length) length = chunk.samples.size
-                if (chunk.capturedAtNanos < capturedAtNanos) capturedAtNanos = chunk.capturedAtNanos
-            }
-            if (length <= 0) continue
-            Arrays.fill(mixed, 0, length, 0.toShort())
-            for (chunk in chunks) {
-                if (chunk == null) continue
-                val samples = chunk.samples
-                for (index in samples.indices) {
-                    val sum = mixed[index] + samples[index]
-                    mixed[index] = when {
-                        sum > Short.MAX_VALUE -> Short.MAX_VALUE
-                        sum < Short.MIN_VALUE -> Short.MIN_VALUE
-                        else -> sum.toShort()
+
+            when {
+                micChunk != null && devChunk != null -> {
+                    for (i in 0 until SAMPLES_PER_CHUNK) {
+                        mixed[i] = mixSamples(micChunk[i], devChunk[i])
                     }
+                    feedAudio(mixed, SAMPLES_PER_CHUNK)
+                }
+                micChunk != null -> {
+                    feedAudio(micChunk, SAMPLES_PER_CHUNK)
+                }
+                devChunk != null -> {
+                    feedAudio(devChunk, SAMPLES_PER_CHUNK)
+                }
+                else -> {
+                    // Keep the AAC encoder fed with 20ms silent frames when no app is playing audio
+                    // so the muxer starts immediately and audio stays synced when sound begins.
+                    feedAudio(silent, SAMPLES_PER_CHUNK)
                 }
             }
-            feedAudio(mixed, length, capturedAtNanos / 1_000L)
         }
     }, "ScreenKitAudioMixer").apply { isDaemon = true }
 
-    private fun feedAudio(samples: ShortArray, length: Int, rawPtsUs: Long) {
+    private fun feedAudio(samples: ShortArray, length: Int) {
         val codec = audioCodec ?: return
         if (audioAbandoned) return
         val bytes = ByteArray(length * 2)
@@ -343,8 +544,11 @@ internal class ScreenRecorderEngine(
             buffer.clear()
             val size = minOf(buffer.remaining(), bytes.size - offset)
             buffer.put(bytes, offset, size)
-            lastAudioInputPtsUs = rawPtsUs
-            runCatching { codec.queueInputBuffer(index, 0, size, rawPtsUs, 0) }
+            val samplesInBuffer = (size / 2).toLong()
+            val ptsUs = (totalAudioSamplesFed * 1_000_000L) / SAMPLE_RATE.toLong()
+            totalAudioSamplesFed += samplesInBuffer
+            lastAudioInputPtsUs = ptsUs
+            runCatching { codec.queueInputBuffer(index, 0, size, ptsUs, 0) }
             offset += size
         }
     }
@@ -404,7 +608,6 @@ internal class ScreenRecorderEngine(
         }
     }
 
-    /** Some encoders only publish their output format once the first buffer has been produced. */
     private fun maybeStartMuxerLocked() {
         if (muxerStarted) return
         val current = muxer ?: return
@@ -420,13 +623,12 @@ internal class ScreenRecorderEngine(
         flushStashLocked(current)
     }
 
-    /** Keeps a stalled audio encoder from holding back a video-only recording. */
     private fun nudgeAudioStart() {
         val codec = audioCodec ?: return
-        if (audioAbandoned || videoTrackIndex < 0) return
-        if (SystemClock.elapsedRealtime() - sessionStartElapsed < 2_500L) return
+        if (audioAbandoned || videoTrackIndex < 0 || audioTrackIndex >= 0) return
+        if (SystemClock.elapsedRealtime() - sessionStartElapsed < 3_500L) return
         audioAbandoned = true
-        onAudioUnavailable("Audio did not start in time; this recording has video only.")
+        onAudioUnavailable("Audio encoder did not start in time; this recording has video only.")
         runCatching { codec.stop() }
         runCatching { codec.release() }
         audioCodec = null
@@ -440,7 +642,7 @@ internal class ScreenRecorderEngine(
             val current = muxer ?: return
             if (!muxerStarted || track < 0) {
                 val stash = if (isVideo) videoStash else audioStash
-                val limit = if (isVideo) 24 else 400
+                val limit = if (isVideo) 36 else 400
                 if (stash.size >= limit) stash.removeFirst()
                 val copy = ByteBuffer.allocateDirect(info.size)
                 buffer.position(info.offset)
@@ -480,41 +682,37 @@ internal class ScreenRecorderEngine(
     // ------------------------------------------------------------------ timestamps
 
     /**
-     * Surface-input encoders stamp frames with CLOCK_MONOTONIC microseconds, the same clock as
-     * System.nanoTime(). Both tracks are therefore offset from one base so they stay in sync. If a
-     * device uses a different clock, each track is anchored to its own first sample instead.
+     * Both video and audio tracks are anchored to 0 us on their first sample so they advance in
+     * lockstep elapsed recording microseconds regardless of hardware clock domain.
      */
     private fun videoPtsUs(rawUs: Long): Long {
-        if (clockMode == CLOCK_UNKNOWN) {
-            val delta = rawUs - baseUs
-            clockMode = if (delta in -1_000_000L..90_000_000L) CLOCK_SHARED else CLOCK_ANCHORED
-        }
         if (firstVideoRawUs < 0L) firstVideoRawUs = rawUs
-        val value = if (clockMode == CLOCK_SHARED) rawUs - baseUs else rawUs - firstVideoRawUs
-        val clamped = value.coerceAtLeast(0L)
-        val next = if (clamped > lastVideoPtsUs) clamped else lastVideoPtsUs + 1L
+        val elapsed = (rawUs - firstVideoRawUs).coerceAtLeast(0L)
+        val next = if (elapsed > lastVideoPtsUs) elapsed else lastVideoPtsUs + 100L
         lastVideoPtsUs = next
         return next
     }
 
     private fun audioPtsUs(rawUs: Long): Long {
         if (firstAudioRawUs < 0L) firstAudioRawUs = rawUs
-        val value = if (clockMode == CLOCK_ANCHORED) rawUs - firstAudioRawUs else rawUs - baseUs
-        val clamped = value.coerceAtLeast(0L)
-        val next = if (clamped > lastAudioPtsUs) clamped else lastAudioPtsUs + 1L
+        val elapsed = (rawUs - firstAudioRawUs).coerceAtLeast(0L)
+        val next = if (elapsed > lastAudioPtsUs) elapsed else lastAudioPtsUs + 100L
         lastAudioPtsUs = next
         return next
     }
-
-    private var lastVideoPtsUs = -1L
-    private var lastAudioPtsUs = -1L
 
     // ------------------------------------------------------------------ teardown
 
     private fun releaseResources() {
         if (!released.compareAndSet(false, true)) return
-        audioSources.forEach { source -> runCatching { source.record.release() } }
+        audioSources.forEach { source ->
+            runCatching { source.agc?.release() }
+            runCatching { source.ns?.release() }
+            runCatching { source.record.release() }
+        }
         audioSources.clear()
+        micSource = null
+        deviceSource = null
         val audio = audioCodec
         if (audio != null) {
             runCatching { audio.stop() }
@@ -546,8 +744,6 @@ internal class ScreenRecorderEngine(
         const val ENCODING = AudioFormat.ENCODING_PCM_16BIT
         const val CHANNEL_MASK = AudioFormat.CHANNEL_IN_MONO
         const val SAMPLES_PER_CHUNK = 960
-        const val CLOCK_UNKNOWN = 0
-        const val CLOCK_SHARED = 1
-        const val CLOCK_ANCHORED = 2
+        const val MIC_GAIN_MULTIPLIER = 4.0f
     }
 }

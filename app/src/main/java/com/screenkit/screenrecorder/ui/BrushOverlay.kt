@@ -11,6 +11,7 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.provider.Settings
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -19,23 +20,29 @@ import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.screenkit.screenrecorder.CaptureIntents
 
 /**
  * Fullscreen interactive drawing overlay with brush tool, color selection,
- * stroke width, undo, eraser, and clear screen options.
+ * pass-through touch toggle, stroke width, undo, eraser, and clear screen options.
  */
 class BrushOverlay(
     private val context: Context,
     private val onClose: () -> Unit = {},
 ) {
-    private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    private val appContext = context.applicationContext
+    private val windowManager = appContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private var rootLayout: FrameLayout? = null
+    private var canvasParams: WindowManager.LayoutParams? = null
+    private var toolbarView: View? = null
+    private var toolbarParams: WindowManager.LayoutParams? = null
 
     // Drawing state
     private val strokePaths = mutableListOf<DrawnStroke>()
     private var currentColor = Color.parseColor("#FF4336") // Default Vibrant Red
     private var currentStrokeWidth = 14f
     private var isEraser = false
+    private var isPassThrough = false
 
     private val colors = listOf(
         Color.parseColor("#FF4336"), // Red
@@ -46,6 +53,39 @@ class BrushOverlay(
         Color.parseColor("#E91E63"), // Pink
         Color.WHITE,
     )
+
+    companion object {
+        @Volatile var activeInstance: BrushOverlay? = null
+            private set
+
+        val isShowing: Boolean get() = activeInstance != null
+
+        fun toggle(context: Context, onStateChanged: () -> Unit = {}) {
+            val existing = activeInstance
+            if (existing != null) {
+                existing.dismiss()
+                onStateChanged()
+                return
+            }
+            if (!Settings.canDrawOverlays(context)) {
+                CaptureIntents.toast(context, "Allow display over other apps to use the brush tool.")
+                return
+            }
+            val overlay = BrushOverlay(context.applicationContext) {
+                onStateChanged()
+            }
+            overlay.show()
+            onStateChanged()
+        }
+
+        fun dismissActive() {
+            activeInstance?.dismiss()
+        }
+
+        fun setToolbarHiddenForScreenshot(hidden: Boolean) {
+            activeInstance?.toolbarView?.visibility = if (hidden) View.GONE else View.VISIBLE
+        }
+    }
 
     data class DrawnStroke(
         val path: Path,
@@ -110,6 +150,8 @@ class BrushOverlay(
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
+            TouchFeedbackOverlay.recordTouchEvent(event)
+            if (isPassThrough) return false
             val x = event.x
             val y = event.y
             when (event.actionMasked) {
@@ -153,9 +195,10 @@ class BrushOverlay(
 
     fun show() {
         if (rootLayout != null) return
+        activeInstance?.takeIf { it !== this }?.dismiss()
 
-        val root = FrameLayout(context)
-        val drawingView = DrawingCanvasView(context)
+        val root = FrameLayout(appContext)
+        val drawingView = DrawingCanvasView(appContext)
         canvasView = drawingView
         root.addView(
             drawingView,
@@ -165,18 +208,6 @@ class BrushOverlay(
             ),
         )
 
-        // Floating Toolbar
-        val toolbar = buildToolbar()
-        val toolbarLp = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-        ).apply {
-            gravity = Gravity.BOTTOM
-            val margin = dp(14)
-            setMargins(margin, 0, margin, dp(24))
-        }
-        root.addView(toolbar, toolbarLp)
-
         val windowType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         } else {
@@ -184,55 +215,111 @@ class BrushOverlay(
             WindowManager.LayoutParams.TYPE_PHONE
         }
 
-        val params = WindowManager.LayoutParams(
+        val cParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             windowType,
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT,
         )
+        canvasParams = cParams
+
+        // Separate floating toolbar window so pass-through mode can make the canvas non-touchable
+        // while keeping the toolbar interactive.
+        val toolbar = buildToolbar()
+        val tParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            windowType,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            y = dp(18)
+        }
+        toolbarView = toolbar
+        toolbarParams = tParams
 
         runCatching {
-            windowManager.addView(root, params)
+            windowManager.addView(root, cParams)
+            windowManager.addView(toolbar, tParams)
             rootLayout = root
+            activeInstance = this
         }
     }
 
     fun dismiss() {
-        val root = rootLayout ?: return
-        runCatching { windowManager.removeView(root) }
+        val root = rootLayout
+        val tb = toolbarView
+        if (root != null) runCatching { windowManager.removeView(root) }
+        if (tb != null) runCatching { windowManager.removeView(tb) }
         rootLayout = null
+        toolbarView = null
         canvasView = null
+        if (activeInstance === this) {
+            activeInstance = null
+        }
         onClose()
     }
 
+    private fun setPassThroughMode(passThrough: Boolean, modeBtn: TextView) {
+        isPassThrough = passThrough
+        val root = rootLayout ?: return
+        val params = canvasParams ?: return
+        params.flags = if (passThrough) {
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        } else {
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        }
+        runCatching { windowManager.updateViewLayout(root, params) }
+        modeBtn.text = if (passThrough) "✎ Draw" else "👆 Tap App"
+        modeBtn.background = GradientDrawable().apply {
+            setColor(if (passThrough) 0xFFB7F36B.toInt() else 0xFF2A373E.toInt())
+            cornerRadius = dp(10).toFloat()
+        }
+        modeBtn.setTextColor(if (passThrough) 0xFF0D1612.toInt() else Color.WHITE)
+    }
+
     private fun buildToolbar(): View {
-        val container = LinearLayout(context).apply {
+        val outer = FrameLayout(appContext).apply {
+            setPadding(dp(12), 0, dp(12), 0)
+        }
+        val container = LinearLayout(appContext).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
-                setColor(0xE6161F23.toInt())
-                cornerRadius = dp(20).toFloat()
-                setStroke(dp(1), 0x33B7F36B.toInt())
+                setColor(0xEE161F23.toInt())
+                cornerRadius = dp(18).toFloat()
+                setStroke(dp(1), 0x44B7F36B.toInt())
             }
-            val pad = dp(10)
+            val pad = dp(8)
             setPadding(pad, pad, pad, pad)
             elevation = dp(8).toFloat()
         }
 
-        // Color and tool selector row
-        val toolsScrollView = HorizontalScrollView(context).apply {
+        val toolsScrollView = HorizontalScrollView(appContext).apply {
             isHorizontalScrollBarEnabled = false
         }
-        val toolsRow = LinearLayout(context).apply {
+        val toolsRow = LinearLayout(appContext).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
 
+        lateinit var modeBtn: TextView
+
         // Color swatches
         colors.forEach { col ->
-            val swatch = View(context).apply {
+            val swatch = View(appContext).apply {
                 background = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
                     setColor(col)
@@ -242,57 +329,74 @@ class BrushOverlay(
                 setOnClickListener {
                     isEraser = false
                     currentColor = col
+                    if (isPassThrough) setPassThroughMode(false, modeBtn)
                     updateToolbarSwatches(toolsRow)
                 }
             }
-            val lp = LinearLayout.LayoutParams(dp(28), dp(28)).apply {
-                rightMargin = dp(8)
+            val lp = LinearLayout.LayoutParams(dp(24), dp(24)).apply {
+                rightMargin = dp(6)
             }
             toolsRow.addView(swatch, lp)
         }
 
+        // Pass-through tap toggle button (lets user tap underlying app while keeping drawings!)
+        modeBtn = makeButton("👆 Tap App") {
+            setPassThroughMode(!isPassThrough, modeBtn)
+        }
+        toolsRow.addView(modeBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(30)).apply {
+            rightMargin = dp(5)
+        })
+
         // Eraser button
         val eraserBtn = makeButton("Eraser") {
             isEraser = true
+            if (isPassThrough) setPassThroughMode(false, modeBtn)
             updateToolbarSwatches(toolsRow)
         }
-        toolsRow.addView(eraserBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(34)).apply {
-            rightMargin = dp(6)
+        toolsRow.addView(eraserBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(30)).apply {
+            rightMargin = dp(5)
         })
 
         // Undo button
         val undoBtn = makeButton("Undo") {
             canvasView?.undo()
         }
-        toolsRow.addView(undoBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(34)).apply {
-            rightMargin = dp(6)
+        toolsRow.addView(undoBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(30)).apply {
+            rightMargin = dp(5)
         })
 
         // Clear button
         val clearBtn = makeButton("Clear") {
             canvasView?.clear()
         }
-        toolsRow.addView(clearBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(34)).apply {
-            rightMargin = dp(6)
+        toolsRow.addView(clearBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(30)).apply {
+            rightMargin = dp(5)
         })
 
         // Close / Exit button
         val closeBtn = makeButton("✕ Done", isAccent = true) {
             dismiss()
         }
-        toolsRow.addView(closeBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(34)))
+        toolsRow.addView(closeBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(30)))
 
         toolsScrollView.addView(toolsRow)
         container.addView(toolsScrollView)
+        outer.addView(
+            container,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            ),
+        )
 
-        return container
+        return outer
     }
 
     private fun updateToolbarSwatches(toolsRow: LinearLayout) {
         var colorIdx = 0
         for (i in 0 until toolsRow.childCount) {
             val child = toolsRow.getChildAt(i)
-            if (colorIdx < colors.size && child.layoutParams.width == dp(28)) {
+            if (colorIdx < colors.size && child.layoutParams.width == dp(24)) {
                 val col = colors[colorIdx]
                 (child.background as? GradientDrawable)?.apply {
                     setStroke(dp(2), if (col == currentColor && !isEraser) Color.WHITE else 0x44FFFFFF)
@@ -303,21 +407,21 @@ class BrushOverlay(
     }
 
     private fun makeButton(text: String, isAccent: Boolean = false, onClick: () -> Unit): TextView {
-        return TextView(context).apply {
+        return TextView(appContext).apply {
             this.text = text
-            textSize = 12f
+            textSize = 11f
             setTextColor(if (isAccent) 0xFF0D1612.toInt() else Color.WHITE)
             gravity = Gravity.CENTER
             background = GradientDrawable().apply {
                 setColor(if (isAccent) 0xFFB7F36B.toInt() else 0xFF2A373E.toInt())
-                cornerRadius = dp(12).toFloat()
+                cornerRadius = dp(10).toFloat()
             }
-            val padH = dp(12)
+            val padH = dp(10)
             setPadding(padH, 0, padH, 0)
             isClickable = true
             setOnClickListener { onClick() }
         }
     }
 
-    private fun dp(value: Int): Int = (value * context.resources.displayMetrics.density).toInt()
+    private fun dp(value: Int): Int = (value * appContext.resources.displayMetrics.density).toInt()
 }

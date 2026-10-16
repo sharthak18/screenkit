@@ -14,20 +14,16 @@ import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import com.screenkit.screenrecorder.data.CaptureAudioMode
 import com.screenkit.screenrecorder.data.SettingsStore
+import com.screenkit.screenrecorder.services.BlackScreenBypass
 import com.screenkit.screenrecorder.services.CameraCaptureService
 import com.screenkit.screenrecorder.services.FloatingOverlayService
 import com.screenkit.screenrecorder.services.ScreenCaptureService
+import com.screenkit.screenrecorder.ui.BrushOverlay
+import com.screenkit.screenrecorder.ui.TouchFeedbackOverlay
 
 /**
  * The invisible hop between a tap on the floating control and Android's permission or consent
  * sheet.
- *
- * Two platform rules force something like this to exist: only an activity can show the
- * screen-capture consent sheet, and Android 14+ expects the capture service to be started while
- * the app is visible. This activity is the smallest thing that satisfies both — a transparent,
- * animation-free window that starts exactly what the tap asked for and disappears immediately. It
- * never shows an app screen, so a screenshot taken from the bubble captures what the user was
- * looking at instead of ScreenKit itself.
  */
 class CaptureRequestActivity : ComponentActivity() {
     private lateinit var permissionLauncher: ActivityResultLauncher<Array<String>>
@@ -46,12 +42,11 @@ class CaptureRequestActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        BlackScreenBypass.prepareWindowForCapture(window)
         command = intent?.getStringExtra(CaptureContract.EXTRA_OVERLAY_COMMAND)
             ?: savedInstanceState?.getString(KEY_COMMAND)
         pendingMode = savedInstanceState?.getString(KEY_MODE)
         overlaySettingsPending = savedInstanceState?.getBoolean(KEY_OVERLAY_SETTINGS) ?: false
-        // A restored instance already has a launcher in flight; re-running the command would show
-        // Android's consent sheet twice.
         if (savedInstanceState != null) handled = true
 
         permissionLauncher = registerForActivityResult(
@@ -59,7 +54,10 @@ class CaptureRequestActivity : ComponentActivity() {
         ) {
             val action = pendingPermissionAction
             pendingPermissionAction = null
-            if (action != null) action() else finishSafely()
+            if (action != null) action() else {
+                FloatingOverlayService.setHiddenForScreenshot(this, false)
+                finishSafely()
+            }
         }
         projectionLauncher = registerForActivityResult(
             ActivityResultContracts.StartActivityForResult(),
@@ -67,11 +65,13 @@ class CaptureRequestActivity : ComponentActivity() {
             val mode = pendingMode ?: command ?: CaptureContract.MODE_SCREENSHOT
             val data = result.data
             if (result.resultCode != Activity.RESULT_OK || data == null) {
+                FloatingOverlayService.setHiddenForScreenshot(this, false)
                 CaptureIntents.toast(this, "Screen capture was cancelled.")
                 finishSafely()
                 return@registerForActivityResult
             }
             if (!CaptureIntents.startScreenCapture(this, mode, result.resultCode, data, pendingCropRect)) {
+                FloatingOverlayService.setHiddenForScreenshot(this, false)
                 CaptureIntents.toast(this, "Could not start the screen capture.")
             }
             finishSafely()
@@ -87,9 +87,11 @@ class CaptureRequestActivity : ComponentActivity() {
             }
         }
 
-        // Never leave a stray transparent window behind if a system sheet never comes back.
         watchdog.postDelayed({
-            if (!isFinishing) finishSafely()
+            if (!isFinishing) {
+                FloatingOverlayService.setHiddenForScreenshot(this, false)
+                finishSafely()
+            }
         }, WATCHDOG_MS)
     }
 
@@ -105,8 +107,14 @@ class CaptureRequestActivity : ComponentActivity() {
         if (handled) return
         handled = true
         when (command) {
-            CaptureContract.COMMAND_SCREENSHOT -> requestScreenCapture(CaptureContract.MODE_SCREENSHOT)
-            CaptureContract.COMMAND_PARTIAL_SCREENSHOT -> startAreaSelection(CaptureContract.MODE_PARTIAL_SCREENSHOT)
+            CaptureContract.COMMAND_SCREENSHOT -> {
+                FloatingOverlayService.setHiddenForScreenshot(this, true)
+                requestScreenCapture(CaptureContract.MODE_SCREENSHOT)
+            }
+            CaptureContract.COMMAND_PARTIAL_SCREENSHOT -> {
+                FloatingOverlayService.setHiddenForScreenshot(this, true)
+                startAreaSelection(CaptureContract.MODE_PARTIAL_SCREENSHOT)
+            }
             CaptureContract.COMMAND_PARTIAL_SCREEN_RECORDING -> {
                 if (ScreenCaptureService.isRecording) {
                     CaptureIntents.stopScreenCapture(this)
@@ -150,12 +158,22 @@ class CaptureRequestActivity : ComponentActivity() {
                 openMainApp()
                 finishSafely()
             }
+            CaptureContract.COMMAND_OPEN_WEB_BYPASS -> {
+                openWebBypass()
+                finishSafely()
+            }
             CaptureContract.COMMAND_HIDE_OVERLAY -> {
                 FloatingOverlayService.hide(this)
                 finishSafely()
             }
             CaptureContract.COMMAND_OPEN_BRUSH -> {
-                com.screenkit.screenrecorder.ui.BrushOverlay(this).show()
+                BrushOverlay.toggle(this)
+                finishSafely()
+            }
+            CaptureContract.COMMAND_TOGGLE_TOUCHES -> {
+                val next = !SettingsStore.showTouches(this)
+                TouchFeedbackOverlay.setEnabled(this, next)
+                CaptureIntents.toast(this, if (next) "Show touches enabled" else "Show touches disabled")
                 finishSafely()
             }
             null -> finishSafely()
@@ -179,9 +197,13 @@ class CaptureRequestActivity : ComponentActivity() {
             title = title,
             onConfirmed = { rect ->
                 pendingCropRect = rect
+                if (targetMode == CaptureContract.MODE_PARTIAL_SCREENSHOT) {
+                    FloatingOverlayService.setHiddenForScreenshot(this, true)
+                }
                 requestScreenCapture(targetMode)
             },
             onCancelled = {
+                FloatingOverlayService.setHiddenForScreenshot(this, false)
                 finishSafely()
             },
         )
@@ -195,23 +217,29 @@ class CaptureRequestActivity : ComponentActivity() {
     }
 
     private fun continueScreenCapture(mode: String) {
-        if (mode == CaptureContract.MODE_SCREEN_RECORDING && CameraCaptureService.isRecording) {
+        if ((mode == CaptureContract.MODE_SCREEN_RECORDING || mode == CaptureContract.MODE_PARTIAL_SCREEN_RECORDING) &&
+            CameraCaptureService.isRecording
+        ) {
+            FloatingOverlayService.setHiddenForScreenshot(this, false)
             CaptureIntents.toast(this, "Stop the camera recording before starting a screen recording.")
             finishSafely()
             return
         }
         if (!CaptureIntents.canWriteExternalStorage(this)) {
+            FloatingOverlayService.setHiddenForScreenshot(this, false)
             CaptureIntents.toast(this, "Storage permission is needed to save captures on this Android version.")
             finishSafely()
             return
         }
         val consent = CaptureIntents.projectionConsentIntent(this)
         if (consent == null) {
+            FloatingOverlayService.setHiddenForScreenshot(this, false)
             CaptureIntents.toast(this, "Screen capture is not available on this device.")
             finishSafely()
             return
         }
         runCatching { projectionLauncher.launch(consent) }.onFailure {
+            FloatingOverlayService.setHiddenForScreenshot(this, false)
             CaptureIntents.toast(this, "Could not open Android's screen-capture prompt.")
             finishSafely()
         }
@@ -336,6 +364,15 @@ class CaptureRequestActivity : ComponentActivity() {
             .addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
                     Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP,
+            )
+        runCatching { startActivity(intent) }
+    }
+
+    private fun openWebBypass() {
+        val intent = Intent(this, WebCaptureActivity::class.java)
+            .addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
                     Intent.FLAG_ACTIVITY_SINGLE_TOP,
             )
         runCatching { startActivity(intent) }

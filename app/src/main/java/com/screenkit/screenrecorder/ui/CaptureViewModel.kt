@@ -39,6 +39,7 @@ internal data class CaptureUiState(
     val cameraPreviewVisible: Boolean = false,
     val cameraRecordingStartedAt: Long = 0L,
     val showTouches: Boolean = false,
+    val hwGlBypass: Boolean = true,
     val recentCaptures: List<MediaCapture> = emptyList(),
 )
 

@@ -57,7 +57,7 @@ internal object CaptureIntents {
             .putExtra(CaptureContract.EXTRA_AUDIO_MODE, audio.id)
             .putExtra(
                 CaptureContract.EXTRA_AUDIO_ENABLED,
-                audio.usesMicrophone && hasPermission(context, Manifest.permission.RECORD_AUDIO),
+                audio.requiresRecordPermission && hasPermission(context, Manifest.permission.RECORD_AUDIO),
             )
         if (cropRect != null) {
             intent.putExtra(CaptureContract.EXTRA_CROP_LEFT, cropRect.left)
@@ -158,7 +158,8 @@ internal object CaptureIntents {
             required += Manifest.permission.WRITE_EXTERNAL_STORAGE
         }
         when (mode) {
-            CaptureContract.MODE_SCREEN_RECORDING -> {
+            CaptureContract.MODE_SCREEN_RECORDING,
+            CaptureContract.MODE_PARTIAL_SCREEN_RECORDING -> {
                 if (SettingsStore.audioMode(context).requiresRecordPermission &&
                     !hasPermission(context, Manifest.permission.RECORD_AUDIO)
                 ) {

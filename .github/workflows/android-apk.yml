@@ -4,8 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      # Temporary: build the verification branch on every push so compile
-      # errors surface immediately without publishing a release tag.
+      - "main"
       - "arena/**"
     tags:
       - "v*"
@@ -28,8 +27,6 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # v3 still requests Google's removed legacy "tools" SDK package and dies with
-      # "Failed to find package 'tools'". v4 installs platform-tools instead.
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
@@ -47,8 +44,6 @@ jobs:
           set -o pipefail
           gradle --no-daemon :app:assembleDebug 2>&1 | tee /tmp/gradle-build.log
 
-      # The Actions log download host is unreachable from the development
-      # sandbox, so publish the compiler output somewhere readable in-band.
       - name: Post Gradle diagnostics to the temporary issue on failure
         if: failure() && steps.build.outcome == 'failure'
         env:
@@ -84,9 +79,10 @@ jobs:
           retention-days: 30
 
       - name: Publish APK to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          name: ScreenKit ${{ github.ref_name }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v1.3.0' }}
+          name: ScreenKit ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v1.3.0' }}
+          make_latest: true
           generate_release_notes: true
           files: ScreenKit.apk
