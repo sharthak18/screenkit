@@ -119,6 +119,7 @@ class AreaSelectionOverlay(
 
         // Touch handling for drawing rectangle
         selectionCanvas.setOnTouchListener { _, event ->
+            TouchFeedbackOverlay.recordTouchEvent(event)
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     startPoint = PointF(event.rawX, event.rawY)
@@ -162,7 +163,8 @@ class AreaSelectionOverlay(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             type,
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT,

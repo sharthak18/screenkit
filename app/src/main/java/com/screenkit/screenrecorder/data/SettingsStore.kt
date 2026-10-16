@@ -126,13 +126,29 @@ internal object SettingsStore {
         prefs(context).edit().putBoolean(CaptureContract.PREF_OVERLAY_INTRO_SEEN, true).apply()
     }
 
-    // ---------------------------------------------------------------- touches
+    // ---------------------------------------------------------------- touches & bypass
 
     fun showTouches(context: Context): Boolean =
         prefs(context).getBoolean(CaptureContract.PREF_SHOW_TOUCHES, false)
 
     fun setShowTouches(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(CaptureContract.PREF_SHOW_TOUCHES, enabled).apply()
+    }
+
+    fun hwGlBypass(context: Context): Boolean =
+        prefs(context).getBoolean(CaptureContract.PREF_HW_GL_BYPASS, true)
+
+    fun setHwGlBypass(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(CaptureContract.PREF_HW_GL_BYPASS, enabled).apply()
+    }
+
+    fun lastWebUrl(context: Context): String =
+        prefs(context).getString(CaptureContract.PREF_LAST_WEB_URL, null)
+            ?.takeIf { it.isNotBlank() }
+            ?: "https://www.google.com"
+
+    fun setLastWebUrl(context: Context, url: String) {
+        prefs(context).edit().putString(CaptureContract.PREF_LAST_WEB_URL, url).apply()
     }
 
     // ---------------------------------------------------------------- projection scope

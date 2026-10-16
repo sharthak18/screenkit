@@ -123,6 +123,8 @@ internal fun MainScreen(
     onOpenCapture: (MediaCapture) -> Unit,
     onToggleShowTouches: (Boolean) -> Unit,
     onOpenBrush: () -> Unit,
+    onToggleHwGlBypass: (Boolean) -> Unit = {},
+    onOpenWebBypass: () -> Unit = {},
 ) {
     ScreenKitTheme {
         Box(Modifier.fillMaxSize().background(Night)) {
@@ -147,6 +149,11 @@ internal fun MainScreen(
                 )
                 BrushToolCard(onOpenBrush = onOpenBrush)
                 TouchesCard(showTouches = state.showTouches, onToggleShowTouches = onToggleShowTouches)
+                BlackScreenBypassCard(
+                    hwGlBypass = state.hwGlBypass,
+                    onToggleHwGlBypass = onToggleHwGlBypass,
+                    onOpenWebBypass = onOpenWebBypass,
+                )
                 CameraCard(state, onToggleCameraOverlay, onCameraFacingSelected)
                 SoundCard(state, onAudioModeSelected)
                 SaveLocationCard(state, onSaveModeSelected, onVolumeSelected, onPickFolder)
@@ -828,6 +835,71 @@ private fun TouchesCard(showTouches: Boolean, onToggleShowTouches: (Boolean) -> 
 }
 
 @Composable
+private fun BlackScreenBypassCard(
+    hwGlBypass: Boolean,
+    onToggleHwGlBypass: (Boolean) -> Unit,
+    onOpenWebBypass: () -> Unit,
+) {
+    Card(
+        shape = RoundedCornerShape(21.dp),
+        colors = CardDefaults.cardColors(containerColor = Panel),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Edge),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            SectionHeading("BLACK-SCREEN BYPASS", "Hardware GL pipeline & protected site capture")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Hardware OpenGL ES bypass",
+                        color = SoftWhite,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        "Routes capture via GPU OES textures, skips blank frames, and uses public presentation flags",
+                        color = Muted,
+                        fontSize = 10.sp,
+                        lineHeight = 14.sp,
+                    )
+                }
+                Switch(
+                    checked = hwGlBypass,
+                    onCheckedChange = onToggleHwGlBypass,
+                )
+            }
+            HorizontalDivider(color = Edge.copy(alpha = 0.7f))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Web Capture Bypass Browser",
+                        color = SoftWhite,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        "Open sites that turn black in Chrome — strips FLAG_SECURE, downgrades HW_SECURE DRM & captures directly via hardware PixelCopy",
+                        color = Muted,
+                        fontSize = 10.sp,
+                        lineHeight = 14.sp,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    onClick = onOpenWebBypass,
+                    shape = RoundedCornerShape(13.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink),
+                ) {
+                    Text("Open Web", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun FloatingControlsCard(
     state: CaptureUiState,
     onEnable: () -> Unit,
@@ -977,11 +1049,12 @@ private fun ActionButton(
     enabled: Boolean,
     emphasized: Boolean,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Button(
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier.fillMaxWidth().height(53.dp),
+        modifier = modifier.fillMaxWidth().height(53.dp),
         shape = RoundedCornerShape(15.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = if (emphasized) Color(0xFFB7414D) else Lime,

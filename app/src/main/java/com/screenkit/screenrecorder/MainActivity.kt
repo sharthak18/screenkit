@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.MotionEvent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -30,12 +31,15 @@ import com.screenkit.screenrecorder.data.ProjectionScope
 import com.screenkit.screenrecorder.data.SaveLocationMode
 import com.screenkit.screenrecorder.data.SettingsStore
 import com.screenkit.screenrecorder.data.StorageVolumes
+import com.screenkit.screenrecorder.services.BlackScreenBypass
 import com.screenkit.screenrecorder.services.CameraCaptureService
 import com.screenkit.screenrecorder.services.FloatingOverlayService
 import com.screenkit.screenrecorder.services.ScreenCaptureService
+import com.screenkit.screenrecorder.ui.BrushOverlay
 import com.screenkit.screenrecorder.ui.CameraFacing
 import com.screenkit.screenrecorder.ui.CaptureViewModel
 import com.screenkit.screenrecorder.ui.MainScreen
+import com.screenkit.screenrecorder.ui.TouchFeedbackOverlay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -53,7 +57,7 @@ class MainActivity : ComponentActivity() {
     private var pendingPermissionAction: (() -> Unit)? = null
     private var overlaySettingsPending = false
     private var cameraPreviewSettingsPending = false
-    private var overlayAutoStartPending = false
+    private var screenshotFlowPending = false
     private var receiverRegistered = false
     private var showOverlayWelcome by mutableStateOf(false)
 
@@ -95,13 +99,23 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
+                CaptureContract.ACTION_TOUCH_STATE -> {
+                    val enabled = intent.getBooleanExtra(
+                        CaptureContract.EXTRA_SHOW_TOUCHES,
+                        SettingsStore.showTouches(this@MainActivity),
+                    )
+                    viewModel.update { it.copy(showTouches = enabled) }
+                }
                 CaptureContract.ACTION_SCREEN_FINISHED,
                 CaptureContract.ACTION_CAMERA_FINISHED -> {
+                    if (intent.action == CaptureContract.ACTION_SCREEN_FINISHED) {
+                        screenshotFlowPending = false
+                        FloatingOverlayService.setHiddenForScreenshot(this@MainActivity, false)
+                    }
                     val success = intent.getBooleanExtra(CaptureContract.EXTRA_SUCCESS, false)
                     val message = intent.getStringExtra(CaptureContract.EXTRA_MESSAGE)
                     if (!message.isNullOrBlank()) showMessage(message)
                     if (!success) {
-                        // A failed screenshot/video still needs to clear a pending busy state.
                         syncServiceStates()
                     }
                     refreshRecentMedia()
@@ -112,11 +126,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        BlackScreenBypass.prepareWindowForCapture(window)
+        BlackScreenBypass.trySystemSecureBypass(this)
+
         pendingProjectionMode = savedInstanceState?.getString("pending_projection_mode")
         pendingPermissionFlow = savedInstanceState?.getString("pending_permission_flow")
         overlaySettingsPending = savedInstanceState?.getBoolean("overlay_settings_pending") ?: false
         cameraPreviewSettingsPending = savedInstanceState?.getBoolean("camera_preview_settings_pending") ?: false
-        overlayAutoStartPending = savedInstanceState?.getBoolean("overlay_auto_start_pending") ?: false
+        screenshotFlowPending = savedInstanceState?.getBoolean("screenshot_flow_pending") ?: false
+
         viewModel = ViewModelProvider(this)[CaptureViewModel::class.java]
         permissionLauncher = registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions(),
@@ -142,10 +160,14 @@ class MainActivity : ComponentActivity() {
             pendingCropRect = null
             val data = result.data
             if (result.resultCode != Activity.RESULT_OK || data == null || mode == null) {
+                screenshotFlowPending = false
+                FloatingOverlayService.setHiddenForScreenshot(this, false)
                 showMessage("Screen capture was cancelled.")
                 return@registerForActivityResult
             }
             if (!CaptureIntents.startScreenCapture(this, mode, result.resultCode, data, crop)) {
+                screenshotFlowPending = false
+                FloatingOverlayService.setHiddenForScreenshot(this, false)
                 showMessage("Could not start the screen capture. Please try again.")
             }
         }
@@ -211,21 +233,27 @@ class MainActivity : ComponentActivity() {
                 onPickFolder = { pickFolder() },
                 onOpenCapture = { capture -> openCapture(capture) },
                 onToggleShowTouches = { enabled -> setShowTouches(enabled) },
-                onOpenBrush = { com.screenkit.screenrecorder.ui.BrushOverlay(this).show() },
+                onOpenBrush = { BrushOverlay.toggle(this) },
+                onToggleHwGlBypass = { enabled -> setHwGlBypass(enabled) },
+                onOpenWebBypass = { openWebBypass() },
             )
         }
 
-        val introAlreadySeen = SettingsStore.overlayIntroSeen(this)
-        if (!introAlreadySeen && !Settings.canDrawOverlays(this)) {
+        // Requirement 1: Always ensure the floating window appears automatically when opening the app
+        if (!Settings.canDrawOverlays(this)) {
             showOverlayWelcome = true
-        } else if (Settings.canDrawOverlays(this)) {
-            SettingsStore.markOverlayIntroSeen(this)
-            SettingsStore.setOverlayEnabled(this, true)
-            overlayAutoStartPending = true
+        } else {
+            ensureFloatingOverlayVisible()
         }
 
-        // Automatic permission flow on first launch for a frictionless experience
         requestInitialPermissionsAutomatically()
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent?): Boolean {
+        if (ev != null) {
+            TouchFeedbackOverlay.recordTouchEvent(ev)
+        }
+        return super.dispatchTouchEvent(ev)
     }
 
     private fun requestInitialPermissionsAutomatically() {
@@ -256,7 +284,7 @@ class MainActivity : ComponentActivity() {
         outState.putString("pending_permission_flow", pendingPermissionFlow)
         outState.putBoolean("overlay_settings_pending", overlaySettingsPending)
         outState.putBoolean("camera_preview_settings_pending", cameraPreviewSettingsPending)
-        outState.putBoolean("overlay_auto_start_pending", overlayAutoStartPending)
+        outState.putBoolean("screenshot_flow_pending", screenshotFlowPending)
         super.onSaveInstanceState(outState)
     }
 
@@ -268,6 +296,7 @@ class MainActivity : ComponentActivity() {
             addAction(CaptureContract.ACTION_SCREEN_FINISHED)
             addAction(CaptureContract.ACTION_CAMERA_STATE)
             addAction(CaptureContract.ACTION_CAMERA_FINISHED)
+            addAction(CaptureContract.ACTION_TOUCH_STATE)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(permissionReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
@@ -275,22 +304,27 @@ class MainActivity : ComponentActivity() {
             registerReceiver(permissionReceiver, filter)
         }
         receiverRegistered = true
+
+        // Requirement 1: Pop up the floating window automatically whenever the user opens/enters the app
+        if (Settings.canDrawOverlays(this) && !screenshotFlowPending && !overlaySettingsPending) {
+            ensureFloatingOverlayVisible()
+        }
     }
 
     override fun onResume() {
         super.onResume()
+        BlackScreenBypass.prepareWindowForCapture(window)
         refreshPermissionSnapshot()
         refreshStorageSnapshot()
         syncServiceStates()
         refreshRecentMedia()
         continueAfterOverlaySettings()
-        val shouldRestoreOverlay = SettingsStore.overlayEnabled(this)
-        if (overlayAutoStartPending || (Settings.canDrawOverlays(this) &&
-                !FloatingOverlayService.isRunning && !overlaySettingsPending)
-        ) {
-            overlayAutoStartPending = false
-            SettingsStore.setOverlayEnabled(this, true)
-            startFloatingOverlay()
+        TouchFeedbackOverlay.sync(this)
+
+        // Requirement 1: Even if the user closed the floating window first and then opened the app,
+        // automatically show the floating window again!
+        if (Settings.canDrawOverlays(this) && !screenshotFlowPending && !overlaySettingsPending) {
+            ensureFloatingOverlayVisible()
         }
     }
 
@@ -308,6 +342,9 @@ class MainActivity : ComponentActivity() {
         refreshPermissionSnapshot()
         refreshStorageSnapshot()
         syncServiceStates()
+        if (Settings.canDrawOverlays(this) && !screenshotFlowPending && !overlaySettingsPending) {
+            ensureFloatingOverlayVisible()
+        }
     }
 
     // ------------------------------------------------------------------ state
@@ -345,6 +382,7 @@ class MainActivity : ComponentActivity() {
                 deviceAudioSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q,
                 cameraFacing = if (SettingsStore.cameraFront(this)) CameraFacing.FRONT else CameraFacing.BACK,
                 showTouches = SettingsStore.showTouches(this),
+                hwGlBypass = SettingsStore.hwGlBypass(this),
             )
         }
     }
@@ -400,6 +438,7 @@ class MainActivity : ComponentActivity() {
             },
             onCancelled = {
                 pendingCropRect = null
+                FloatingOverlayService.setHiddenForScreenshot(this, false)
             },
         )
         overlay.show()
@@ -417,7 +456,7 @@ class MainActivity : ComponentActivity() {
     private fun requestScreenCapture(mode: String) {
         val state = viewModel.state.value
         if (state.screenRecording) {
-            if (mode == CaptureContract.MODE_SCREENSHOT) {
+            if (mode == CaptureContract.MODE_SCREENSHOT || mode == CaptureContract.MODE_PARTIAL_SCREENSHOT) {
                 showMessage("Stop the current screen recording before taking a screenshot.")
             } else {
                 stopScreenRecording()
@@ -427,6 +466,10 @@ class MainActivity : ComponentActivity() {
         if (state.screenSessionActive || state.cameraRecording) {
             showMessage("Finish the active capture before starting another one.")
             return
+        }
+        if (mode == CaptureContract.MODE_SCREENSHOT || mode == CaptureContract.MODE_PARTIAL_SCREENSHOT) {
+            screenshotFlowPending = true
+            FloatingOverlayService.setHiddenForScreenshot(this, true)
         }
         pendingProjectionMode = mode
         runWithPermissions(
@@ -440,10 +483,12 @@ class MainActivity : ComponentActivity() {
     private fun continueScreenCaptureAfterPermissions(mode: String) {
         if (!CaptureIntents.canWriteExternalStorage(this)) {
             pendingProjectionMode = null
+            screenshotFlowPending = false
+            FloatingOverlayService.setHiddenForScreenshot(this, false)
             showMessage("Storage permission is needed to save captures on this Android version.")
             return
         }
-        if (mode == CaptureContract.MODE_SCREEN_RECORDING &&
+        if ((mode == CaptureContract.MODE_SCREEN_RECORDING || mode == CaptureContract.MODE_PARTIAL_SCREEN_RECORDING) &&
             SettingsStore.audioMode(this).requiresRecordPermission &&
             !hasPermission(Manifest.permission.RECORD_AUDIO)
         ) {
@@ -458,12 +503,16 @@ class MainActivity : ComponentActivity() {
         val consent = CaptureIntents.projectionConsentIntent(this)
         if (consent == null) {
             pendingProjectionMode = null
+            screenshotFlowPending = false
+            FloatingOverlayService.setHiddenForScreenshot(this, false)
             showMessage("Screen capture is not available on this device.")
             return
         }
         pendingProjectionMode = mode
         runCatching { projectionLauncher.launch(consent) }.onFailure {
             pendingProjectionMode = null
+            screenshotFlowPending = false
+            FloatingOverlayService.setHiddenForScreenshot(this, false)
             showMessage("Could not open Android's screen-capture approval prompt.")
         }
     }
@@ -616,7 +665,7 @@ class MainActivity : ComponentActivity() {
         refreshStorageSnapshot()
     }
 
-    // ------------------------------------------------------------------ save location
+    // ------------------------------------------------------------------ save location & bypass
 
     private fun setSaveMode(mode: SaveLocationMode) {
         when (mode) {
@@ -676,33 +725,33 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun setShowTouches(enabled: Boolean) {
-        SettingsStore.setShowTouches(this, enabled)
+        TouchFeedbackOverlay.setEnabled(this, enabled)
         viewModel.update { it.copy(showTouches = enabled) }
-        tryToggleSystemShowTouches(enabled)
+        showMessage(if (enabled) "Show touches enabled." else "Show touches disabled.")
     }
 
-    private fun tryToggleSystemShowTouches(enabled: Boolean) {
-        val value = if (enabled) 1 else 0
-        var success = false
-        try {
-            if (Settings.System.canWrite(this)) {
-                Settings.System.putInt(contentResolver, "show_touches", value)
-                success = true
-            }
-        } catch (_: Exception) {}
+    private fun setHwGlBypass(enabled: Boolean) {
+        SettingsStore.setHwGlBypass(this, enabled)
+        viewModel.update { it.copy(hwGlBypass = enabled) }
+        showMessage(
+            if (enabled) "Hardware OpenGL ES black-screen bypass enabled."
+            else "Hardware OpenGL ES bypass disabled.",
+        )
+    }
 
-        if (!success && enabled) {
-            // Guide user to Developer Options if system setting is restricted by Android OS
-            showMessage("Tip: Turn on 'Show touches' / 'Show taps' in Developer Options to display touches in screen recordings.")
-            runCatching {
-                startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
-            }
-        } else if (success) {
-            showMessage(if (enabled) "Touch visualization enabled." else "Touch visualization disabled.")
-        }
+    private fun openWebBypass() {
+        val intent = Intent(this, WebCaptureActivity::class.java)
+        runCatching { startActivity(intent) }
     }
 
     // ------------------------------------------------------------------ floating control
+
+    private fun ensureFloatingOverlayVisible() {
+        if (!Settings.canDrawOverlays(this)) return
+        SettingsStore.markOverlayIntroSeen(this)
+        SettingsStore.setOverlayEnabled(this, true)
+        startFloatingOverlay()
+    }
 
     private fun enableFloatingOverlay() {
         SettingsStore.markOverlayIntroSeen(this)

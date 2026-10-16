@@ -98,8 +98,8 @@ class CameraCaptureService : LifecycleService() {
 
         private const val CHANNEL_ID = "camera_capture"
         private const val NOTIFICATION_ID = 5201
-        private const val PREVIEW_WIDTH_DP = 174
-        private const val PREVIEW_HEIGHT_DP = 232
+        private const val PREVIEW_WIDTH_DP = 116
+        private const val PREVIEW_HEIGHT_DP = 154
 
         @Volatile var isActive: Boolean = false
             private set
@@ -482,20 +482,20 @@ class CameraCaptureService : LifecycleService() {
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(10), dp(7), dp(7), dp(7))
+            setPadding(dp(7), dp(3), dp(5), dp(3))
             setBackgroundColor(Color.rgb(30, 42, 46))
         }
         val label = TextView(this).apply {
-            text = "LIVE CAMERA  ·  DRAG"
-            textSize = 10f
+            text = "CAM · DRAG"
+            textSize = 8.5f
             typeface = Typeface.create("sans-serif", Typeface.BOLD)
             setTextColor(Color.rgb(190, 245, 125))
-            letterSpacing = 0.05f
+            letterSpacing = 0.04f
         }
-        header.addView(label, LinearLayout.LayoutParams(0, dp(32), 1f))
+        header.addView(label, LinearLayout.LayoutParams(0, dp(22), 1f))
         val close = TextView(this).apply {
             text = "×"
-            textSize = 23f
+            textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
             isClickable = true
@@ -505,15 +505,15 @@ class CameraCaptureService : LifecycleService() {
                 startService(hide)
             }
         }
-        header.addView(close, LinearLayout.LayoutParams(dp(32), dp(32)))
+        header.addView(close, LinearLayout.LayoutParams(dp(22), dp(22)))
 
         val cameraPreview = PreviewView(this).apply {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
             scaleType = PreviewView.ScaleType.FILL_CENTER
             setBackgroundColor(Color.BLACK)
         }
-        root.addView(header, LinearLayout.LayoutParams(dp(PREVIEW_WIDTH_DP), dp(46)))
-        root.addView(cameraPreview, LinearLayout.LayoutParams(dp(PREVIEW_WIDTH_DP), dp(PREVIEW_HEIGHT_DP - 46)))
+        root.addView(header, LinearLayout.LayoutParams(dp(PREVIEW_WIDTH_DP), dp(28)))
+        root.addView(cameraPreview, LinearLayout.LayoutParams(dp(PREVIEW_WIDTH_DP), dp(PREVIEW_HEIGHT_DP - 28)))
 
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY

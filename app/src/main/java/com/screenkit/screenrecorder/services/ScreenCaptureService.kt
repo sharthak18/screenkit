@@ -11,9 +11,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
-import android.graphics.Color
 import android.graphics.PixelFormat
-import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.Image
 import android.media.ImageReader
@@ -40,6 +38,7 @@ import com.screenkit.screenrecorder.data.CaptureAudioMode
 import com.screenkit.screenrecorder.data.CaptureKind
 import com.screenkit.screenrecorder.data.CaptureSink
 import com.screenkit.screenrecorder.data.SettingsStore
+import com.screenkit.screenrecorder.ui.TouchFeedbackOverlay
 import java.io.IOException
 import java.io.OutputStream
 import java.nio.ByteBuffer
@@ -49,9 +48,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * One user-approved capture session: a screenshot, or a screen recording.
  *
- * A session is a single MediaProjection consent, which Android 14+ requires per capture. The
- * projection is stopped as soon as the capture finishes so no capture keeps running in the
- * background, and every session has a visible notification plus Android's own screen-share chip.
+ * Includes hardware OpenGL ES OES texture routing (`CropSurfaceRenderer`), resilient VirtualDisplay
+ * flags, multi-frame black-screen rejection, and hardware framebuffer fallback (`BlackScreenBypass`).
  */
 class ScreenCaptureService : Service() {
     private enum class Mode { SCREENSHOT, VIDEO }
@@ -88,6 +86,9 @@ class ScreenCaptureService : Service() {
     private var audioMode = CaptureAudioMode.NONE
     private var audioNote: String? = null
     private var skippedInitialFrames = 0
+    private var skippedBlackFrames = 0
+    private var screenshotStartElapsed = 0L
+    private var screenshotStashAfterElapsed = 0L
     private var screenshotArmAtElapsed = 0L
     private var cropRect: android.graphics.RectF? = null
     private var cropRenderer: CropSurfaceRenderer? = null
@@ -99,7 +100,6 @@ class ScreenCaptureService : Service() {
         override fun onStop() {
             if (!sessionActive || finishing) return
             if (mode == Mode.SCREENSHOT && screenshotClaimed.get()) {
-                // A frame has already been handed to the image worker; let its save complete.
                 return
             }
             finishSession(
@@ -124,8 +124,10 @@ class ScreenCaptureService : Service() {
         private const val NOTIFICATION_ID = 5101
         private const val MAX_VIDEO_EDGE = 1920
         private const val FRAME_RATE = 30
-        private const val SCREENSHOT_SETTLE_MS = 320L
-        private const val SCREENSHOT_FALLBACK_MS = 700L
+        private const val SCREENSHOT_STASH_DELAY_MS = 180L
+        private const val SCREENSHOT_SETTLE_MS = 340L
+        private const val SCREENSHOT_FALLBACK_MS = 850L
+        private const val MAX_BLACK_FRAME_RETRIES = 8
 
         @Volatile var isActive: Boolean = false
             private set
@@ -170,14 +172,23 @@ class ScreenCaptureService : Service() {
         recorderStarted = false
         screenshotClaimed.set(false)
         skippedInitialFrames = 0
+        skippedBlackFrames = 0
         audioNote = null
-        screenshotArmAtElapsed = SystemClock.elapsedRealtime()
+        val nowElapsed = SystemClock.elapsedRealtime()
+        screenshotStartElapsed = nowElapsed
+        screenshotStashAfterElapsed = nowElapsed + SCREENSHOT_STASH_DELAY_MS
+        screenshotArmAtElapsed = nowElapsed + SCREENSHOT_SETTLE_MS
         audioMode = resolveAudioMode(intent)
 
         isActive = true
         isRecording = false
         activeMode = if (mode == Mode.VIDEO) "screen" else "screenshot"
         recordingStartedAt = 0L
+
+        if (mode == Mode.SCREENSHOT) {
+            // Hide the floating bubble and overlays immediately before starting projection
+            FloatingOverlayService.setHiddenForScreenshot(this, true)
+        }
 
         if (intent.hasExtra(CaptureContract.EXTRA_CROP_LEFT)) {
             val left = intent.getFloatExtra(CaptureContract.EXTRA_CROP_LEFT, 0f)
@@ -192,6 +203,7 @@ class ScreenCaptureService : Service() {
         }
 
         try {
+            BlackScreenBypass.trySystemSecureBypass(this)
             promoteToForeground(mode == Mode.VIDEO && audioMode.requiresRecordPermission && canRecordAudio())
             broadcastState()
             startApprovedCapture(intent)
@@ -250,10 +262,10 @@ class ScreenCaptureService : Service() {
 
         val uvCropRect = if (crop != null) {
             android.graphics.RectF(
-                crop.left / fullW.toFloat(),
-                crop.top / fullH.toFloat(),
-                crop.right / fullW.toFloat(),
-                crop.bottom / fullH.toFloat(),
+                (crop.left / fullW.toFloat()).coerceIn(0f, 1f),
+                (crop.top / fullH.toFloat()).coerceIn(0f, 1f),
+                (crop.right / fullW.toFloat()).coerceIn(0f, 1f),
+                (crop.bottom / fullH.toFloat()).coerceIn(0f, 1f),
             )
         } else null
 
@@ -272,12 +284,13 @@ class ScreenCaptureService : Service() {
             else -> audioMode
         }
 
-        if (effective.usesDeviceAudio) {
+        if (effective != CaptureAudioMode.NONE) {
             startEngineRecording(metrics, size, effective, uvCropRect)
         } else {
             startMediaRecorderRecording(metrics, size, effective, uvCropRect)
         }
 
+        TouchFeedbackOverlay.sync(this)
         isRecording = true
         recordingStartedAt = System.currentTimeMillis()
         broadcastState()
@@ -357,10 +370,10 @@ class ScreenCaptureService : Service() {
             file = file,
             onAudioUnavailable = { note -> audioNote = note },
         )
+        screenEngine.prepare()
+        setupVirtualDisplayWithCrop(metrics, size, screenEngine.surface, uvCropRect)
         screenEngine.start()
         engine = screenEngine
-
-        setupVirtualDisplayWithCrop(metrics, size, screenEngine.surface, uvCropRect)
     }
 
     private fun setupVirtualDisplayWithCrop(
@@ -369,52 +382,70 @@ class ScreenCaptureService : Service() {
         encoderSurface: Surface,
         uvCropRect: android.graphics.RectF?,
     ) {
-        if (uvCropRect != null) {
-            val renderer = CropSurfaceRenderer(
-                inputSurface = encoderSurface,
-                outputWidth = targetSize.first,
-                outputHeight = targetSize.second,
-                cropRect = uvCropRect,
-            )
-            cropRenderer = renderer
-            val texId = renderer.createOesTexture()
-            intermediateTexId = texId
-            val surfaceTexture = android.graphics.SurfaceTexture(texId).apply {
-                setDefaultBufferSize(metrics.widthPixels, metrics.heightPixels)
-            }
-            intermediateSurfaceTexture = surfaceTexture
-            val surface = Surface(surfaceTexture)
-            intermediateSurface = surface
+        val proj = projection ?: throw IOException("Android did not provide a screen capture session.")
+        val hwBypass = SettingsStore.hwGlBypass(this)
+        val useGlPipeline = uvCropRect != null || hwBypass
 
-            val transformMatrix = FloatArray(16)
-            surfaceTexture.setOnFrameAvailableListener({ st ->
-                st.updateTexImage()
-                st.getTransformMatrix(transformMatrix)
-                renderer.drawFrame(texId, transformMatrix, st.timestamp)
-            }, mainHandler)
+        if (useGlPipeline) {
+            val glBound = runCatching {
+                val renderer = CropSurfaceRenderer(
+                    inputSurface = encoderSurface,
+                    outputWidth = targetSize.first,
+                    outputHeight = targetSize.second,
+                    cropRect = uvCropRect,
+                )
+                cropRenderer = renderer
+                val texId = renderer.createOesTexture()
+                intermediateTexId = texId
+                val surfaceTexture = android.graphics.SurfaceTexture(texId).apply {
+                    setDefaultBufferSize(metrics.widthPixels, metrics.heightPixels)
+                }
+                intermediateSurfaceTexture = surfaceTexture
+                val surface = Surface(surfaceTexture)
+                intermediateSurface = surface
 
-            virtualDisplay = projection?.createVirtualDisplay(
-                "ScreenKit screen recording",
-                metrics.widthPixels,
-                metrics.heightPixels,
-                metrics.densityDpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                surface,
-                null,
-                mainHandler,
-            ) ?: throw IOException("Android could not create the recording display.")
-        } else {
-            virtualDisplay = projection?.createVirtualDisplay(
-                "ScreenKit screen recording",
-                targetSize.first,
-                targetSize.second,
-                metrics.densityDpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                encoderSurface,
-                null,
-                mainHandler,
-            ) ?: throw IOException("Android could not create the recording display.")
+                val transformMatrix = FloatArray(16)
+                surfaceTexture.setOnFrameAvailableListener({ st ->
+                    runCatching {
+                        st.updateTexImage()
+                        st.getTransformMatrix(transformMatrix)
+                        renderer.drawFrame(texId, transformMatrix, st.timestamp)
+                    }
+                }, mainHandler)
+
+                virtualDisplay = BlackScreenBypass.createResilientVirtualDisplay(
+                    projection = proj,
+                    name = "ScreenKit screen recording",
+                    width = metrics.widthPixels,
+                    height = metrics.heightPixels,
+                    densityDpi = metrics.densityDpi,
+                    surface = surface,
+                    handler = mainHandler,
+                    hwBypass = hwBypass,
+                ) ?: throw IOException("Android could not create the recording display.")
+                true
+            }.getOrDefault(false)
+
+            if (glBound) return
+            // Clean up partial GL objects and fall back if needed
+            cropRenderer?.let { runCatching { it.release() } }
+            cropRenderer = null
+            intermediateSurface?.let { runCatching { it.release() } }
+            intermediateSurface = null
+            intermediateSurfaceTexture?.let { runCatching { it.release() } }
+            intermediateSurfaceTexture = null
         }
+
+        virtualDisplay = BlackScreenBypass.createResilientVirtualDisplay(
+            projection = proj,
+            name = "ScreenKit screen recording",
+            width = targetSize.first,
+            height = targetSize.second,
+            densityDpi = metrics.densityDpi,
+            surface = encoderSurface,
+            handler = mainHandler,
+            hwBypass = hwBypass,
+        ) ?: throw IOException("Android could not create the recording display.")
     }
 
     private fun bitrateFor(width: Int, height: Int): Int =
@@ -435,31 +466,35 @@ class ScreenCaptureService : Service() {
         val height = metrics.heightPixels
         require(width > 0 && height > 0) { "Could not read the device screen dimensions." }
 
-        // Hide the floating overlay window during screenshot capture
-        sendBroadcast(Intent(CaptureContract.ACTION_TEMPORARY_HIDE_OVERLAY).setPackage(packageName))
+        // Ensure all floating overlays are hidden before capturing any display frames
+        FloatingOverlayService.setHiddenForScreenshot(this, true)
 
         imageThread = HandlerThread("ScreenKitImageWriter").also { it.start() }
         imageHandler = Handler(imageThread!!.looper)
-        imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3)
+        imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 4)
         imageReader!!.setOnImageAvailableListener(::onImageAvailable, imageHandler!!)
-        // Android is still dismissing its own consent sheet when the display appears, so wait a
-        // moment before accepting a frame: that is what produced screenshots of the dialog.
-        screenshotArmAtElapsed = SystemClock.elapsedRealtime() + SCREENSHOT_SETTLE_MS
-        virtualDisplay = projection?.createVirtualDisplay(
-            "ScreenKit screenshot",
-            width,
-            height,
-            metrics.densityDpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            imageReader!!.surface,
-            null,
-            mainHandler,
+
+        val now = SystemClock.elapsedRealtime()
+        screenshotStartElapsed = now
+        screenshotStashAfterElapsed = now + SCREENSHOT_STASH_DELAY_MS
+        screenshotArmAtElapsed = now + SCREENSHOT_SETTLE_MS
+
+        val proj = projection ?: throw IOException("Android did not provide a screen capture session.")
+        virtualDisplay = BlackScreenBypass.createResilientVirtualDisplay(
+            projection = proj,
+            name = "ScreenKit screenshot",
+            width = width,
+            height = height,
+            densityDpi = metrics.densityDpi,
+            surface = imageReader!!.surface,
+            handler = mainHandler,
+            hwBypass = SettingsStore.hwGlBypass(this),
         ) ?: throw IOException("Android could not create a screenshot display.")
 
         broadcastState()
         updateNotification(recording = false)
-        // A perfectly still screen may not push another frame after the settle delay, so fall back
-        // to the newest frame that arrived while the delay was running.
+
+        // Fallback if the screen is completely still after the settle delay
         mainHandler.postDelayed({
             if (sessionActive && mode == Mode.SCREENSHOT && !finishing && !screenshotClaimed.get()) {
                 captureStashedScreenshot()
@@ -483,21 +518,58 @@ class ScreenCaptureService : Service() {
         try {
             image = reader.acquireLatestImage() ?: return
             if (!sessionActive || finishing || screenshotClaimed.get()) return
-            // The first buffer can be empty on some devices; use the next fresh display frame.
             if (skippedInitialFrames++ == 0) return
-            if (SystemClock.elapsedRealtime() < screenshotArmAtElapsed) {
+
+            val now = SystemClock.elapsedRealtime()
+            // Ignore frames that arrived before the floating overlay had time to disappear
+            if (now < screenshotStashAfterElapsed) return
+            if (now < screenshotArmAtElapsed) {
                 stashPendingFrame(image)
                 return
             }
-            if (!screenshotClaimed.compareAndSet(false, true)) return
 
             val rawBitmap = bitmapFromImage(image)
-            val bitmap = cropBitmapIfNeeded(rawBitmap)
-            if (bitmap != rawBitmap) {
+            val cropped = cropBitmapIfNeeded(rawBitmap)
+            if (cropped != rawBitmap) {
                 rawBitmap.recycle()
             }
-            val blank = isProtectedFrame(bitmap)
-            val saved = saveScreenshot(bitmap)
+
+            val isBlack = BlackScreenBypass.isFrameBlackOrBlank(cropped)
+            if (isBlack &&
+                skippedBlackFrames < MAX_BLACK_FRAME_RETRIES &&
+                now - screenshotArmAtElapsed < 1_600L
+            ) {
+                // Skip initial black compositor warmup frames and wait for a real rendered frame
+                skippedBlackFrames++
+                synchronized(pendingLock) {
+                    if (pendingBitmap == null) {
+                        pendingBitmap = cropped
+                    } else {
+                        cropped.recycle()
+                    }
+                }
+                return
+            }
+
+            if (!screenshotClaimed.compareAndSet(false, true)) {
+                cropped.recycle()
+                return
+            }
+
+            var finalBitmap = cropped
+            var finalBlank = isBlack
+            if (finalBlank) {
+                // Attempt hardware/shell screencap fallback if MediaProjection returned a black frame
+                val fallback = BlackScreenBypass.tryHardwareScreencapFallback(cropRect)
+                if (fallback != null) {
+                    finalBitmap.recycle()
+                    finalBitmap = fallback
+                    finalBlank = false
+                }
+            }
+
+            bitmap = finalBitmap
+            val saved = saveScreenshot(finalBitmap)
             mainHandler.post {
                 if (finishing) {
                     sink?.discard(this)
@@ -505,8 +577,8 @@ class ScreenCaptureService : Service() {
                     finishSession(
                         keepVideo = false,
                         screenshot = saved,
-                        message = if (blank) {
-                            "Screenshot saved, but the image is blank: that screen blocks capture (secure or DRM window)."
+                        message = if (finalBlank) {
+                            "Screenshot is blank due to app/site DRM. Tap 'Bypass' on the floating bubble to capture restricted websites."
                         } else {
                             "Screenshot saved to ${SettingsStore.describeSaveLocation(this@ScreenCaptureService)}."
                         },
@@ -531,15 +603,24 @@ class ScreenCaptureService : Service() {
         }
     }
 
-    /** Keeps the newest frame captured during the settle delay, in case the screen then goes still. */
+    /** Keeps the newest frame captured during the settle delay, preferring non-black frames. */
     private fun stashPendingFrame(image: Image) {
         val decoded = try {
             bitmapFromImage(image)
         } catch (_: Exception) {
             return
         }
+        val incomingBlack = BlackScreenBypass.isFrameBlackOrBlank(decoded)
         synchronized(pendingLock) {
-            pendingBitmap?.takeUnless { it.isRecycled }?.recycle()
+            val existing = pendingBitmap
+            if (existing != null && !existing.isRecycled && incomingBlack &&
+                !BlackScreenBypass.isFrameBlackOrBlank(existing)
+            ) {
+                // Never overwrite a valid rendered frame with a black frame
+                decoded.recycle()
+                return
+            }
+            existing?.takeUnless { it.isRecycled }?.recycle()
             pendingBitmap = decoded
         }
     }
@@ -561,11 +642,19 @@ class ScreenCaptureService : Service() {
         }
         worker.post {
             val rawBitmap = stashed
-            val cropped = cropBitmapIfNeeded(rawBitmap)
+            var cropped = cropBitmapIfNeeded(rawBitmap)
             if (cropped != rawBitmap) {
                 rawBitmap.recycle()
             }
-            val blank = isProtectedFrame(cropped)
+            var blank = BlackScreenBypass.isFrameBlackOrBlank(cropped)
+            if (blank) {
+                val fallback = BlackScreenBypass.tryHardwareScreencapFallback(cropRect)
+                if (fallback != null) {
+                    cropped.recycle()
+                    cropped = fallback
+                    blank = false
+                }
+            }
             val saved = try {
                 saveScreenshot(cropped)
             } catch (_: Exception) {
@@ -582,7 +671,7 @@ class ScreenCaptureService : Service() {
                         screenshot = saved,
                         message = when {
                             saved == null -> "The screenshot could not be saved. Check free storage and try again."
-                            blank -> "Screenshot saved, but the image is blank: that screen blocks capture (secure or DRM window)."
+                            blank -> "Screenshot is blank due to app/site DRM. Tap 'Bypass' on the floating bubble to capture restricted websites."
                             else -> "Screenshot saved to ${SettingsStore.describeSaveLocation(this)}."
                         },
                         stopProjection = true,
@@ -628,30 +717,6 @@ class ScreenCaptureService : Service() {
             padded.recycle()
             throw error
         }
-    }
-
-    /** A fully opaque black frame means the source window is protected from capture. */
-    private fun isProtectedFrame(bitmap: Bitmap): Boolean {
-        val stepX = (bitmap.width / 12).coerceAtLeast(1)
-        val stepY = (bitmap.height / 12).coerceAtLeast(1)
-        var sampled = 0
-        var dark = 0
-        var y = stepY / 2
-        while (y < bitmap.height) {
-            var x = stepX / 2
-            while (x < bitmap.width) {
-                val pixel = bitmap.getPixel(x, y)
-                sampled++
-                if (Color.alpha(pixel) == 255 &&
-                    Color.red(pixel) == 0 && Color.green(pixel) == 0 && Color.blue(pixel) == 0
-                ) {
-                    dark++
-                }
-                x += stepX
-            }
-            y += stepY
-        }
-        return sampled > 0 && dark == sampled
     }
 
     private fun saveScreenshot(bitmap: Bitmap): Uri? {
@@ -728,7 +793,6 @@ class ScreenCaptureService : Service() {
                 }.getOrDefault(false)
             }
             recorderStarted = false
-            // Disconnect the encoder surface before releasing its producer.
             virtualDisplay?.let { runCatching { it.release() } }
             virtualDisplay = null
             releaseRecorder()
@@ -769,13 +833,14 @@ class ScreenCaptureService : Service() {
         isRecording = false
         activeMode = ""
         recordingStartedAt = 0L
-        broadcastState()
-        broadcastFinished(success, resultUri, finalMessage)
 
         if (mode == Mode.SCREENSHOT) {
-            // Restore floating overlay window if it was temporarily hidden
-            sendBroadcast(Intent(CaptureContract.ACTION_RESTORE_OVERLAY).setPackage(packageName))
+            // Restore floating overlay window after screenshot finishes
+            FloatingOverlayService.setHiddenForScreenshot(this, false)
         }
+
+        broadcastState()
+        broadcastFinished(success, resultUri, finalMessage)
 
         if (foregroundStarted) {
             stopForeground(STOP_FOREGROUND_REMOVE)
