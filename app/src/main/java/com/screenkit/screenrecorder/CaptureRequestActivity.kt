@@ -12,13 +12,16 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import com.screenkit.screenrecorder.data.AutoToolMode
 import com.screenkit.screenrecorder.data.CaptureAudioMode
 import com.screenkit.screenrecorder.data.SettingsStore
 import com.screenkit.screenrecorder.services.BlackScreenBypass
 import com.screenkit.screenrecorder.services.CameraCaptureService
 import com.screenkit.screenrecorder.services.FloatingOverlayService
 import com.screenkit.screenrecorder.services.ScreenCaptureService
+import com.screenkit.screenrecorder.ui.AutoClickScrollOverlay
 import com.screenkit.screenrecorder.ui.BrushOverlay
+import com.screenkit.screenrecorder.ui.CreatorToolsOverlay
 import com.screenkit.screenrecorder.ui.TouchFeedbackOverlay
 
 /**
@@ -111,6 +114,28 @@ class CaptureRequestActivity : ComponentActivity() {
                 FloatingOverlayService.setHiddenForScreenshot(this, true)
                 requestScreenCapture(CaptureContract.MODE_SCREENSHOT)
             }
+            CaptureContract.COMMAND_LONG_SCREENSHOT -> {
+                FloatingOverlayService.setHiddenForScreenshot(this, true)
+                requestScreenCapture(CaptureContract.MODE_LONG_SCREENSHOT)
+            }
+            CaptureContract.COMMAND_PAUSE_RESUME_SCREEN_RECORDING -> {
+                if (ScreenCaptureService.isRecording) {
+                    CaptureIntents.togglePauseScreenCapture(this)
+                }
+                finishSafely()
+            }
+            CaptureContract.COMMAND_TOGGLE_TELEPROMPTER -> {
+                CreatorToolsOverlay.toggleTeleprompter(this)
+                finishSafely()
+            }
+            CaptureContract.COMMAND_TOGGLE_MAGNIFIER -> {
+                CreatorToolsOverlay.toggleMagnifier(this)
+                finishSafely()
+            }
+            CaptureContract.COMMAND_TOGGLE_WATERMARK -> {
+                CreatorToolsOverlay.toggleWatermark(this)
+                finishSafely()
+            }
             CaptureContract.COMMAND_PARTIAL_SCREENSHOT -> {
                 FloatingOverlayService.setHiddenForScreenshot(this, true)
                 startAreaSelection(CaptureContract.MODE_PARTIAL_SCREENSHOT)
@@ -168,6 +193,18 @@ class CaptureRequestActivity : ComponentActivity() {
             }
             CaptureContract.COMMAND_OPEN_BRUSH -> {
                 BrushOverlay.toggle(this)
+                finishSafely()
+            }
+            CaptureContract.COMMAND_OPEN_AUTO_CLICK -> {
+                AutoClickScrollOverlay.show(this, AutoToolMode.CLICK)
+                finishSafely()
+            }
+            CaptureContract.COMMAND_OPEN_AUTO_SCROLL -> {
+                AutoClickScrollOverlay.show(this, AutoToolMode.SCROLL)
+                finishSafely()
+            }
+            CaptureContract.COMMAND_TOGGLE_AUTO_TOOL -> {
+                AutoClickScrollOverlay.toggle(this)
                 finishSafely()
             }
             CaptureContract.COMMAND_TOGGLE_TOUCHES -> {

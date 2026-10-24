@@ -46,10 +46,11 @@ internal object CaptureIntents {
         val audio = SettingsStore.audioMode(context)
         val intent = Intent(context, ScreenCaptureService::class.java)
             .setAction(
-                if (mode == CaptureContract.MODE_SCREENSHOT || mode == CaptureContract.MODE_PARTIAL_SCREENSHOT) {
-                    ScreenCaptureService.ACTION_SCREENSHOT
-                } else {
-                    ScreenCaptureService.ACTION_START_RECORDING
+                when (mode) {
+                    CaptureContract.MODE_SCREENSHOT,
+                    CaptureContract.MODE_PARTIAL_SCREENSHOT -> ScreenCaptureService.ACTION_SCREENSHOT
+                    CaptureContract.MODE_LONG_SCREENSHOT -> ScreenCaptureService.ACTION_LONG_SCREENSHOT
+                    else -> ScreenCaptureService.ACTION_START_RECORDING
                 },
             )
             .putExtra(CaptureContract.EXTRA_RESULT_CODE, resultCode)
@@ -94,6 +95,13 @@ internal object CaptureIntents {
     fun stopScreenCapture(context: Context): Boolean = runCatching {
         context.startService(
             Intent(context, ScreenCaptureService::class.java).setAction(ScreenCaptureService.ACTION_STOP),
+        )
+        true
+    }.getOrDefault(false)
+
+    fun togglePauseScreenCapture(context: Context): Boolean = runCatching {
+        context.startService(
+            Intent(context, ScreenCaptureService::class.java).setAction(ScreenCaptureService.ACTION_PAUSE_RESUME),
         )
         true
     }.getOrDefault(false)

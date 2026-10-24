@@ -4,6 +4,7 @@ package com.screenkit.screenrecorder
 object CaptureContract {
     const val EXTRA_ACTIVE = "screenkit.active"
     const val EXTRA_RECORDING = "screenkit.recording"
+    const val EXTRA_PAUSED = "screenkit.paused"
     const val EXTRA_PREVIEW = "screenkit.preview"
     const val EXTRA_MODE = "screenkit.mode"
     const val EXTRA_STARTED_AT = "screenkit.started_at"
@@ -27,6 +28,7 @@ object CaptureContract {
     const val ACTION_CAMERA_STATE = "com.screenkit.screenrecorder.CAMERA_STATE"
     const val ACTION_CAMERA_FINISHED = "com.screenkit.screenrecorder.CAMERA_FINISHED"
     const val ACTION_TOUCH_STATE = "com.screenkit.screenrecorder.TOUCH_STATE"
+    const val ACTION_AUTO_STATE = "com.screenkit.screenrecorder.AUTO_STATE"
 
     /** Overlay bubble actions. Each one runs without bringing the main app to the front. */
     const val COMMAND_SCREENSHOT = "screenshot"
@@ -43,6 +45,14 @@ object CaptureContract {
     const val COMMAND_OPEN_BRUSH = "open_brush"
     const val COMMAND_TOGGLE_TOUCHES = "toggle_touches"
     const val COMMAND_OPEN_WEB_BYPASS = "open_web_bypass"
+    const val COMMAND_TOGGLE_AUTO_TOOL = "toggle_auto_tool"
+    const val COMMAND_OPEN_AUTO_CLICK = "open_auto_click"
+    const val COMMAND_OPEN_AUTO_SCROLL = "open_auto_scroll"
+    const val COMMAND_PAUSE_RESUME_SCREEN_RECORDING = "pause_resume_screen_recording"
+    const val COMMAND_LONG_SCREENSHOT = "long_screenshot"
+    const val COMMAND_TOGGLE_TELEPROMPTER = "toggle_teleprompter"
+    const val COMMAND_TOGGLE_MAGNIFIER = "toggle_magnifier"
+    const val COMMAND_TOGGLE_WATERMARK = "toggle_watermark"
 
     /** Broadcast actions to coordinate overlay visibility during screenshot capture */
     const val ACTION_TEMPORARY_HIDE_OVERLAY = "com.screenkit.screenrecorder.overlay.TEMP_HIDE"
@@ -50,6 +60,7 @@ object CaptureContract {
 
     /** Capture modes handled by [CaptureRequestActivity]. */
     const val MODE_SCREENSHOT = "screenshot"
+    const val MODE_LONG_SCREENSHOT = "long_screenshot"
     const val MODE_SCREEN_RECORDING = "screen_recording"
     const val MODE_CAMERA_RECORDING = "camera_recording"
     const val MODE_CAMERA_PREVIEW = "camera_preview"
@@ -78,4 +89,39 @@ object CaptureContract {
     const val PREF_SAVE_VOLUME = "save_volume"
     const val PREF_SAVE_TREE_URI = "save_tree_uri"
     const val PREF_SAVE_FOLDER_LABEL = "save_folder_label"
+
+    // Auto Clicker & Auto Scroller preferences
+    const val PREF_AUTO_TOOL_MODE = "auto_tool_mode"
+    const val PREF_AUTO_CLICK_POINT_COUNT = "auto_click_point_count"
+    const val PREF_AUTO_CLICK_DELAY_MS = "auto_click_delay_ms"
+    const val PREF_AUTO_CLICK_SPEED_MS = "auto_click_speed_ms"
+    const val PREF_AUTO_CLICK_TAPS_PER_POINT = "auto_click_taps_per_point"
+    const val PREF_AUTO_CLICK_TOTAL_CYCLES = "auto_click_total_cycles"
+    const val PREF_AUTO_CLICK_DURATION_SEC = "auto_click_duration_sec"
+    const val PREF_AUTO_CLICK_POINTS_DATA = "auto_click_points_data"
+
+    const val PREF_AUTO_SCROLL_DIRECTION = "auto_scroll_direction"
+    const val PREF_AUTO_SCROLL_SPEED_MS = "auto_scroll_speed_ms"
+    const val PREF_AUTO_SCROLL_INTERVAL_MS = "auto_scroll_interval_ms"
+    const val PREF_AUTO_SCROLL_DURATION_SEC = "auto_scroll_duration_sec"
+    const val PREF_AUTO_SCROLL_MAX_COUNT = "auto_scroll_max_count"
+    const val PREF_AUTO_SCROLL_DISTANCE_PCT = "auto_scroll_distance_pct"
+
+    // Macro, Profiles, Jitter, Color Trigger, Creator Tools & Telemetry preferences
+    const val PREF_AUTO_RANDOM_JITTER = "auto_random_jitter"
+    const val PREF_AUTO_COLOR_TRIGGER_ENABLED = "auto_color_trigger_enabled"
+    const val PREF_AUTO_COLOR_TRIGGER_HEX = "auto_color_trigger_hex"
+    const val PREF_AUTO_MACRO_STEPS = "auto_macro_steps"
+    const val PREF_AUTO_PROFILE_PREFIX = "auto_saved_profile_"
+
+    const val PREF_SHAKE_TO_STOP = "shake_to_stop_enabled"
+    const val PREF_VOLUME_KEY_STOP = "volume_key_stop_enabled"
+    const val PREF_TELEPROMPTER_SCRIPT = "teleprompter_script"
+    const val PREF_TELEPROMPTER_SPEED = "teleprompter_speed"
+    const val PREF_WATERMARK_ENABLED = "watermark_enabled"
+    const val PREF_WATERMARK_TEXT = "watermark_text"
+
+    const val PREF_STAT_APP_OPENS = "stat_app_opens"
+    const val PREF_STAT_CAPTURES_SAVED = "stat_captures_saved"
+    const val PREF_STAT_AUTO_GESTURES = "stat_auto_gestures"
 }
