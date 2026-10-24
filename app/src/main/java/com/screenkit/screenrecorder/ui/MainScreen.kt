@@ -249,7 +249,7 @@ internal fun MainScreen(
                     context = context,
                     capture = selectedVideo,
                     onDismiss = { studioCapture = null },
-                    onSavedResult = { message ->
+                    onCompleted = { message ->
                         onRefreshLibrary(message)
                     },
                 )
@@ -1801,22 +1801,20 @@ private fun UsageStatsAndUpdaterCard(
                 )
             }
 
-            if (summary != null && summary.releases.isNotEmpty()) {
+            if (summary != null) {
                 Surface(color = PanelRaised, shape = RoundedCornerShape(12.dp)) {
                     Column(Modifier.fillMaxWidth().padding(11.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
-                            text = "Installed: v${summary.installedVersion}  ·  Latest on GitHub: ${summary.latestTag}",
+                            text = "Installed: v${summary.currentVersion}  ·  Latest on GitHub: ${summary.latestTag}",
                             color = if (summary.updateAvailable) Lime else SoftWhite,
                             fontSize = 11.5.sp,
                             fontWeight = FontWeight.Bold,
                         )
-                        summary.releases.take(3).forEach { rel ->
-                            Text(
-                                text = "• ${rel.tagName}: ${rel.downloadCount} APK downloads",
-                                color = Muted,
-                                fontSize = 10.sp,
-                            )
-                        }
+                        Text(
+                            text = summary.releaseBreakdown,
+                            color = Muted,
+                            fontSize = 10.sp,
+                        )
                     }
                 }
             }
@@ -1831,7 +1829,7 @@ private fun UsageStatsAndUpdaterCard(
                     Text("↻ Check Updates & Stats", fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
                 }
                 Button(
-                    onClick = { onDownloadLatestApk(summary?.latestDownloadUrl ?: "https://github.com/sharthak18/ScreenKit/releases/latest/download/ScreenKit.apk") },
+                    onClick = { onDownloadLatestApk(summary?.latestApkUrl ?: "https://github.com/sharthak18/ScreenKit/releases/latest/download/ScreenKit.apk") },
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(13.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink),
