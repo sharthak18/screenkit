@@ -458,9 +458,10 @@ private fun CaptureActions(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     ActionIcon(Icons.Filled.FiberManualRecord, Color(0xFFFF6671), "rec")
                     Column(Modifier.padding(start = 12.dp).weight(1f)) {
-                        Text("Screen recording", color = SoftWhite, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Text(if (state.liveStreaming) "Live screen sharing" else "Screen recording", color = SoftWhite, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         Text(
-                            if (state.screenPaused) "PAUSED · Tap Resume to continue recording"
+                            if (state.liveStreaming) "Broadcasting screen · No local MP4"
+                            else if (state.screenPaused) "PAUSED · Tap Resume to continue recording"
                             else "H.264 MP4 · Full or partial area · Pause/Resume supported",
                             color = if (state.screenPaused) Color(0xFFFFC857) else Muted,
                             fontSize = 11.sp,

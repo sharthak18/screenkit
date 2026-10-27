@@ -42,7 +42,7 @@ jobs:
         id: build
         run: |
           set -o pipefail
-          gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug 2>&1 | tee /tmp/gradle-build.log
+          gradle --no-daemon :stream-common:testDebugUnitTest :stream-rtmp:testDebugUnitTest :app:testDebugUnitTest :app:assembleDebug 2>&1 | tee /tmp/gradle-build.log
 
       - name: Post Gradle diagnostics to the temporary issue on failure
         if: failure() && steps.build.outcome == 'failure'

@@ -42,11 +42,12 @@ class ScreenKitAutoService : AccessibilityService() {
         if (event != null &&
             event.action == KeyEvent.ACTION_DOWN &&
             event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN &&
-            AutoClickScrollOverlay.isExecuting &&
+            (AutoClickScrollOverlay.isExecuting || ScreenCaptureService.isLive) &&
             SettingsStore.volumeKeyStopEnabled(this)
         ) {
-            AutoClickScrollOverlay.stopExecution()
-            CaptureIntents.toast(this, "Volume Down pressed: Auto Click / Scroll stopped.")
+            if (AutoClickScrollOverlay.isExecuting) AutoClickScrollOverlay.stopExecution()
+            if (ScreenCaptureService.isLive) CaptureIntents.stopScreenCapture(this)
+            CaptureIntents.toast(this, "Volume Down pressed: active live stream / automation stopped.")
             return true
         }
         return super.onKeyEvent(event)

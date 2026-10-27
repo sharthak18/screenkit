@@ -19,9 +19,11 @@ internal class RtmpPublisher(
     private val closed = AtomicBoolean(false)
     @Volatile private var connected = false
     @Volatile private var waitingForKeyFrame = true
+    private var timestampOriginUs = 0L
     private val client = RtmpClient(this).apply {
         setLogs(false)
-        setCheckServerAlive(true)
+        // Many streaming servers block ICMP/echo probes; use socket/read/write failures instead.
+        setCheckServerAlive(false)
         resizeCache(120)
         setAudioInfo(48_000, false)
     }
@@ -41,14 +43,19 @@ internal class RtmpPublisher(
         client.setVideoInfo(sps.duplicate(), pps.duplicate(), null)
     }
 
+    @Synchronized
     fun sample(video: Boolean, buffer: ByteBuffer, info: MediaCodec.BufferInfo) {
         if (closed.get() || !connected) return
         if (waitingForKeyFrame) {
             if (!video || info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME == 0) return
+            timestampOriginUs = info.presentationTimeUs
             waitingForKeyFrame = false
         }
         // RootEncoder clones the bytes synchronously before queueing them; the codec may then release its buffer.
-        if (video) client.sendVideo(buffer, info) else client.sendAudio(buffer, info)
+        val pts = info.presentationTimeUs - timestampOriginUs
+        if (pts < 0L) return
+        val adjusted = MediaCodec.BufferInfo().apply { set(info.offset, info.size, pts, info.flags) }
+        if (video) client.sendVideo(buffer, adjusted) else client.sendAudio(buffer, adjusted)
     }
 
     fun encoderError() = fail("The audio/video encoder stopped. Lower the quality and start a new stream.")

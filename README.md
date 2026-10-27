@@ -8,7 +8,7 @@ A native, high-performance Android capture, creator studio & screen automation s
 
 [⬇️ **Download the latest ScreenKit v2.1.0 APK**](https://github.com/sharthak18/ScreenKit/releases/latest/download/ScreenKit.apk)
 
-- **Current Version**: `v2.1.0` (`versionCode = 7`)
+- **Current Version**: `v2.1.0` (`versionCode = 8`)
 - Compatible with **Android 7.0 (API 24) to Android 15 (API 35)**.
 - Device Audio & Mixed (`Mic + Device`) playback capture supported on **Android 10+**.
 - Full screen scope and single-app exclusion selection supported on **Android 14+**.
@@ -16,7 +16,13 @@ A native, high-performance Android capture, creator studio & screen automation s
 
 ---
 
-## What's New in v2.1.0 (13 Major Features)
+## What's New in v2.1.0
+
+**Go Live** adds RTMP/RTMPS screen streaming with quality settings, microphone/device/mixed audio,
+live timer and outgoing bitrate, mute/end controls, and private in-memory stream keys.
+See [Go Live setup](#go-live--v210) below.
+
+## Included from v2.0.0 (13 Major Features)
 
 1. **Touch Macro Recorder ("Record My Actions & Replay")**: Tap `● Macro` in the Auto tool, press `● Rec`, perform any real-time sequence of finger taps and swipes across the screen, tap `■ Done`, and replay your exact touch choreography (`1×` to `Infinite ∞`).
 2. **Saved Auto-Clicker Profiles & Presets (Slots 1–3)**: Save and load named pin positions, delays, speeds, and modes into 3 instant profile slots (pre-loaded with **TikTok/Reels Scroll**, **Game Farming 1→4**, and **Reader Slow Scroll**).
@@ -188,5 +194,6 @@ that your account has live-streaming access.
   compatibility. Test with a private/unlisted broadcast before going public.
 
 Transport uses the Apache-2.0 licensed [RootEncoder RTMP module, version 2.5.3](https://github.com/pedroSG94/RootEncoder/tree/2.5.3/rtmp),
-pinned for compatibility with this project's Kotlin toolchain. ScreenKit reuses its own
+vendored as source for reproducible builds, with TLS hostname verification, credential-safe logging,
+and disconnect handling patches documented in `third_party/rootencoder/README.md`. ScreenKit reuses its own
 MediaCodec screen encoder and mixed-audio capture pipeline; streaming does not write a temporary MP4.

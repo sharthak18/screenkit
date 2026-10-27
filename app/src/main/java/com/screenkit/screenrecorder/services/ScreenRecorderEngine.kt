@@ -640,7 +640,7 @@ internal class ScreenRecorderEngine(
     private fun registerTrack(codec: MediaCodec, isVideo: Boolean) {
         val format = runCatching { codec.outputFormat }.getOrNull() ?: return
         if (publisher != null) {
-            if (isVideo) runCatching { publisher.videoFormat(format) }.onFailure { publisher.encoderError() }
+            if (isVideo) runCatching { publisher?.videoFormat(format) }.onFailure { publisher?.encoderError() }
             return
         }
         synchronized(muxerLock) {

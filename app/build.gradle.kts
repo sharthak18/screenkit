@@ -32,7 +32,7 @@ android {
 
 dependencies {
     // Transport only; reuse ScreenKit's H.264/AAC screen and mixed-audio encoders.
-    implementation("com.github.pedroSG94.RootEncoder:rtmp:2.5.3")
+    implementation(project(":stream-rtmp"))
     testImplementation("junit:junit:4.13.2")
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.activity:activity-compose:1.9.3")
