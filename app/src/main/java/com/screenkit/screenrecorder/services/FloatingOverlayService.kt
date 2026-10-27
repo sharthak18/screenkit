@@ -36,9 +36,12 @@ import com.screenkit.screenrecorder.CaptureRequestActivity
 import com.screenkit.screenrecorder.MainActivity
 import com.screenkit.screenrecorder.R
 import com.screenkit.screenrecorder.WebCaptureActivity
+import com.screenkit.screenrecorder.data.AutoToolMode
 import com.screenkit.screenrecorder.data.CaptureAudioMode
 import com.screenkit.screenrecorder.data.SettingsStore
+import com.screenkit.screenrecorder.ui.AutoClickScrollOverlay
 import com.screenkit.screenrecorder.ui.BrushOverlay
+import com.screenkit.screenrecorder.ui.CreatorToolsOverlay
 import com.screenkit.screenrecorder.ui.TouchFeedbackOverlay
 import kotlin.math.abs
 
@@ -114,6 +117,11 @@ class FloatingOverlayService : Service() {
                         rebuildOverlay()
                     }
                 }
+                CaptureContract.ACTION_AUTO_STATE -> {
+                    if (!isTemporarilyHiddenForScreenshot) {
+                        rebuildOverlay()
+                    }
+                }
                 CaptureContract.ACTION_TEMPORARY_HIDE_OVERLAY -> {
                     applyScreenshotHiddenState(true)
                 }
@@ -133,9 +141,9 @@ class FloatingOverlayService : Service() {
 
         // Balanced floating window dimensions (icon a little bigger for easy visibility & tap)
         private const val BUBBLE_DP = 42
-        private const val CELL_WIDTH_DP = 38
+        private const val CELL_WIDTH_DP = 35
         private const val CELL_HEIGHT_DP = 40
-        private const val COLUMNS = 6
+        private const val COLUMNS = 7
         private const val REMOVE_TARGET_SIZE_DP = 58
         private const val REMOVE_TARGET_MARGIN_BOTTOM_DP = 42
 
@@ -187,6 +195,7 @@ class FloatingOverlayService : Service() {
             addAction(CaptureContract.ACTION_SCREEN_FINISHED)
             addAction(CaptureContract.ACTION_CAMERA_STATE)
             addAction(CaptureContract.ACTION_TOUCH_STATE)
+            addAction(CaptureContract.ACTION_AUTO_STATE)
             addAction(CaptureContract.ACTION_TEMPORARY_HIDE_OVERLAY)
             addAction(CaptureContract.ACTION_RESTORE_OVERLAY)
         }
@@ -222,6 +231,8 @@ class FloatingOverlayService : Service() {
                 cameraPreview = CameraCaptureService.isPreviewVisible
                 showTouches = SettingsStore.showTouches(this)
                 TouchFeedbackOverlay.sync(this)
+                CreatorToolsOverlay.syncWatermark(this)
+                ShakeAndKeyStopDetector.start(this)
 
                 if (overlayRoot == null) {
                     addOverlay()
@@ -246,6 +257,8 @@ class FloatingOverlayService : Service() {
         isTemporarilyHiddenForScreenshot = hidden
         TouchFeedbackOverlay.setTemporarilyHiddenForScreenshot(hidden)
         BrushOverlay.setToolbarHiddenForScreenshot(hidden)
+        AutoClickScrollOverlay.setHiddenForScreenshot(hidden)
+        CreatorToolsOverlay.setHiddenForScreenshot(hidden)
         val root = overlayRoot ?: return
         val params = overlayParams ?: return
         val manager = windowManager ?: return
@@ -447,14 +460,19 @@ class FloatingOverlayService : Service() {
     }
 
     /**
-     * Compact 2x6 grid of quick actions including Brush, Show Touch, Crop/Full Screenshot & Record,
-     * Camera Lens, Flip, Sound, and Anti-Black-Screen Web Bypass.
+     * Compact 2x7 grid of quick actions including Brush, Show Touch, Auto Click (1→2→3),
+     * Auto Scroll (↑/↓), Crop/Full Screenshot & Record, Camera Lens, Flip, Sound, and Web Bypass.
      */
     private fun makeMenu(): LinearLayout {
         val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val soundActive = SettingsStore.audioMode(this) != CaptureAudioMode.NONE
         val touchesActive = SettingsStore.showTouches(this)
         val brushActive = BrushOverlay.isShowing
+        val autoShowing = AutoClickScrollOverlay.isShowing
+        val autoMode = SettingsStore.autoToolMode(this)
+        val autoClickActive = autoShowing && autoMode == AutoToolMode.CLICK
+        val autoScrollActive = autoShowing && autoMode == AutoToolMode.SCROLL
+        val screenPaused = ScreenCaptureService.isPaused
         val rows = listOf(
             listOf(
                 MenuAction("▧", "Full", CaptureContract.COMMAND_SCREENSHOT, false),
@@ -465,7 +483,16 @@ class FloatingOverlayService : Service() {
                     CaptureContract.COMMAND_TOGGLE_SCREEN_RECORDING,
                     screenRecording,
                 ),
-                MenuAction("✂", "Crop Rec", CaptureContract.COMMAND_PARTIAL_SCREEN_RECORDING, false),
+                if (screenRecording) {
+                    MenuAction(
+                        if (screenPaused) "▶" else "⏸",
+                        if (screenPaused) "Resume" else "Pause",
+                        CaptureContract.COMMAND_PAUSE_RESUME_SCREEN_RECORDING,
+                        screenPaused,
+                    )
+                } else {
+                    MenuAction("✂", "Crop Rec", CaptureContract.COMMAND_PARTIAL_SCREEN_RECORDING, false)
+                },
                 MenuAction(
                     if (cameraRecording) "■" else "◉",
                     if (cameraRecording) "Stop" else "Camera",
@@ -473,17 +500,24 @@ class FloatingOverlayService : Service() {
                     cameraRecording,
                 ),
                 MenuAction(soundIcon(), soundLabel(), CaptureContract.COMMAND_CYCLE_AUDIO, soundActive),
+                MenuAction("⊕", "AutoTap", CaptureContract.COMMAND_OPEN_AUTO_CLICK, autoClickActive),
             ),
             listOf(
                 MenuAction("✎", "Brush", CaptureContract.COMMAND_OPEN_BRUSH, brushActive),
                 MenuAction("⊙", "Touch", CaptureContract.COMMAND_TOGGLE_TOUCHES, touchesActive),
+                MenuAction("⇅", "Scroll", CaptureContract.COMMAND_OPEN_AUTO_SCROLL, autoScrollActive),
                 MenuAction(
-                    if (cameraPreview) "◉" else "◎",
-                    "Lens",
-                    CaptureContract.COMMAND_TOGGLE_CAMERA_OVERLAY,
-                    cameraPreview,
+                    "🔍",
+                    "Zoom",
+                    CaptureContract.COMMAND_TOGGLE_MAGNIFIER,
+                    CreatorToolsOverlay.isMagnifierShowing,
                 ),
-                MenuAction("⇄", "Flip", CaptureContract.COMMAND_FLIP_CAMERA, false),
+                MenuAction(
+                    "▤",
+                    "Script",
+                    CaptureContract.COMMAND_TOGGLE_TELEPROMPTER,
+                    CreatorToolsOverlay.isTeleprompterShowing,
+                ),
                 MenuAction("🌐", "Bypass", CaptureContract.COMMAND_OPEN_WEB_BYPASS, false),
                 MenuAction("⊞", "Home", CaptureContract.COMMAND_OPEN_APP, false),
             ),
@@ -582,7 +616,8 @@ class FloatingOverlayService : Service() {
 
         expanded = false
         if (command == CaptureContract.COMMAND_SCREENSHOT ||
-            command == CaptureContract.COMMAND_PARTIAL_SCREENSHOT
+            command == CaptureContract.COMMAND_PARTIAL_SCREENSHOT ||
+            command == CaptureContract.COMMAND_LONG_SCREENSHOT
         ) {
             // Requirement 4: Immediately hide the floating bubble when taking a screenshot!
             applyScreenshotHiddenState(true)
@@ -605,6 +640,62 @@ class FloatingOverlayService : Service() {
             }
             CaptureContract.COMMAND_OPEN_BRUSH -> {
                 toggleBrushOverlay()
+                return
+            }
+            CaptureContract.COMMAND_OPEN_AUTO_CLICK -> {
+                if (AutoClickScrollOverlay.isShowing &&
+                    SettingsStore.autoToolMode(this) == AutoToolMode.CLICK
+                ) {
+                    AutoClickScrollOverlay.dismiss()
+                } else {
+                    AutoClickScrollOverlay.show(this, AutoToolMode.CLICK) {
+                        rebuildOverlay()
+                    }
+                }
+                rebuildOverlay()
+                return
+            }
+            CaptureContract.COMMAND_OPEN_AUTO_SCROLL -> {
+                if (AutoClickScrollOverlay.isShowing &&
+                    SettingsStore.autoToolMode(this) == AutoToolMode.SCROLL
+                ) {
+                    AutoClickScrollOverlay.dismiss()
+                } else {
+                    AutoClickScrollOverlay.show(this, AutoToolMode.SCROLL) {
+                        rebuildOverlay()
+                    }
+                }
+                rebuildOverlay()
+                return
+            }
+            CaptureContract.COMMAND_TOGGLE_AUTO_TOOL -> {
+                AutoClickScrollOverlay.toggle(this) {
+                    rebuildOverlay()
+                }
+                return
+            }
+            CaptureContract.COMMAND_PAUSE_RESUME_SCREEN_RECORDING -> {
+                if (ScreenCaptureService.isRecording) {
+                    CaptureIntents.togglePauseScreenCapture(this)
+                }
+                return
+            }
+            CaptureContract.COMMAND_TOGGLE_TELEPROMPTER -> {
+                CreatorToolsOverlay.toggleTeleprompter(this) {
+                    rebuildOverlay()
+                }
+                return
+            }
+            CaptureContract.COMMAND_TOGGLE_MAGNIFIER -> {
+                CreatorToolsOverlay.toggleMagnifier(this) {
+                    rebuildOverlay()
+                }
+                return
+            }
+            CaptureContract.COMMAND_TOGGLE_WATERMARK -> {
+                CreatorToolsOverlay.toggleWatermark(this) {
+                    rebuildOverlay()
+                }
                 return
             }
             CaptureContract.COMMAND_TOGGLE_TOUCHES -> {
@@ -1051,6 +1142,10 @@ class FloatingOverlayService : Service() {
         snapAnimator = null
         hideRemoveTarget()
         BrushOverlay.dismissActive()
+        AutoClickScrollOverlay.dismiss()
+        CreatorToolsOverlay.hideTeleprompter()
+        CreatorToolsOverlay.hideMagnifier()
+        CreatorToolsOverlay.hideWatermark()
         overlayRoot?.let { view -> runCatching { windowManager?.removeView(view) } }
         overlayRoot = null
         overlayParams = null

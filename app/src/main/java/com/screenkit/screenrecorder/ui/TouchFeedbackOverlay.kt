@@ -95,6 +95,10 @@ object TouchFeedbackOverlay {
         }
     }
 
+    fun recordSyntheticTap(rawX: Float, rawY: Float) {
+        recordTouch(rawX, rawY)
+    }
+
     fun recordTouch(rawX: Float, rawY: Float) {
         if (!isShowing || isTemporarilyHidden) return
         if (rawX <= 0f && rawY <= 0f) return

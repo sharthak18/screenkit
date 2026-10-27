@@ -1,7 +1,11 @@
 package com.screenkit.screenrecorder.ui
 
 import androidx.lifecycle.ViewModel
+import com.screenkit.screenrecorder.data.AutoSavedProfile
+import com.screenkit.screenrecorder.data.AutoScrollDirection
+import com.screenkit.screenrecorder.data.AutoToolMode
 import com.screenkit.screenrecorder.data.CaptureAudioMode
+import com.screenkit.screenrecorder.data.GithubReleaseSummary
 import com.screenkit.screenrecorder.data.MediaCapture
 import com.screenkit.screenrecorder.data.ProjectionScope
 import com.screenkit.screenrecorder.data.SaveLocationMode
@@ -32,6 +36,7 @@ internal data class CaptureUiState(
     val projectionScope: ProjectionScope = ProjectionScope.ENTIRE_SCREEN,
     val screenSessionActive: Boolean = false,
     val screenRecording: Boolean = false,
+    val screenPaused: Boolean = false,
     val screenshotInProgress: Boolean = false,
     val screenRecordingStartedAt: Long = 0L,
     val cameraSessionActive: Boolean = false,
@@ -40,6 +45,36 @@ internal data class CaptureUiState(
     val cameraRecordingStartedAt: Long = 0L,
     val showTouches: Boolean = false,
     val hwGlBypass: Boolean = true,
+    val autoAccessibilityEnabled: Boolean = false,
+    val autoOverlayShowing: Boolean = false,
+    val autoExecuting: Boolean = false,
+    val autoToolMode: AutoToolMode = AutoToolMode.CLICK,
+    val autoClickPointCount: Int = 3,
+    val autoClickDelayMs: Long = 500L,
+    val autoClickSpeedMs: Long = 55L,
+    val autoClickTapsPerPoint: Int = 1,
+    val autoClickTotalCycles: Int = 10,
+    val autoScrollDirection: AutoScrollDirection = AutoScrollDirection.DOWN,
+    val autoScrollSpeedMs: Long = 450L,
+    val autoScrollIntervalMs: Long = 1500L,
+    val autoScrollDurationSec: Int = 120,
+    val autoScrollDistancePct: Int = 55,
+    val autoRandomJitter: Boolean = true,
+    val autoColorTriggerEnabled: Boolean = false,
+    val autoColorTriggerHex: String = "#4CAF50",
+    val autoMacroStepCount: Int = 0,
+    val autoSavedProfiles: List<AutoSavedProfile> = emptyList(),
+    val shakeToStopEnabled: Boolean = true,
+    val volumeKeyStopEnabled: Boolean = true,
+    val teleprompterShowing: Boolean = false,
+    val teleprompterScript: String = "",
+    val magnifierShowing: Boolean = false,
+    val watermarkEnabled: Boolean = false,
+    val watermarkText: String = "Recorded with ScreenKit",
+    val statAppOpens: Int = 1,
+    val statCapturesSaved: Int = 0,
+    val statAutoGestures: Int = 0,
+    val githubReleaseSummary: GithubReleaseSummary? = null,
     val recentCaptures: List<MediaCapture> = emptyList(),
 )
 

@@ -24,6 +24,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import com.screenkit.screenrecorder.data.AutoScrollDirection
+import com.screenkit.screenrecorder.data.AutoToolMode
 import com.screenkit.screenrecorder.data.CaptureAudioMode
 import com.screenkit.screenrecorder.data.MediaCapture
 import com.screenkit.screenrecorder.data.MediaStoreRepository
@@ -31,13 +33,18 @@ import com.screenkit.screenrecorder.data.ProjectionScope
 import com.screenkit.screenrecorder.data.SaveLocationMode
 import com.screenkit.screenrecorder.data.SettingsStore
 import com.screenkit.screenrecorder.data.StorageVolumes
+import com.screenkit.screenrecorder.data.UpdateAndStatsManager
 import com.screenkit.screenrecorder.services.BlackScreenBypass
 import com.screenkit.screenrecorder.services.CameraCaptureService
 import com.screenkit.screenrecorder.services.FloatingOverlayService
 import com.screenkit.screenrecorder.services.ScreenCaptureService
+import com.screenkit.screenrecorder.services.ScreenKitAutoService
+import com.screenkit.screenrecorder.services.ShakeAndKeyStopDetector
+import com.screenkit.screenrecorder.ui.AutoClickScrollOverlay
 import com.screenkit.screenrecorder.ui.BrushOverlay
 import com.screenkit.screenrecorder.ui.CameraFacing
 import com.screenkit.screenrecorder.ui.CaptureViewModel
+import com.screenkit.screenrecorder.ui.CreatorToolsOverlay
 import com.screenkit.screenrecorder.ui.MainScreen
 import com.screenkit.screenrecorder.ui.TouchFeedbackOverlay
 import kotlinx.coroutines.Dispatchers
@@ -68,12 +75,14 @@ class MainActivity : ComponentActivity() {
                 CaptureContract.ACTION_SCREEN_STATE -> {
                     val active = intent.getBooleanExtra(CaptureContract.EXTRA_ACTIVE, false)
                     val recording = intent.getBooleanExtra(CaptureContract.EXTRA_RECORDING, false)
+                    val paused = intent.getBooleanExtra(CaptureContract.EXTRA_PAUSED, false)
                     val mode = intent.getStringExtra(CaptureContract.EXTRA_MODE).orEmpty()
                     val startedAt = intent.getLongExtra(CaptureContract.EXTRA_STARTED_AT, 0L)
                     viewModel.update { old ->
                         old.copy(
                             screenSessionActive = active,
                             screenRecording = active && recording,
+                            screenPaused = active && recording && paused,
                             screenshotInProgress = active && mode == "screenshot",
                             screenRecordingStartedAt = if (active && recording) startedAt else 0L,
                         )
@@ -105,6 +114,9 @@ class MainActivity : ComponentActivity() {
                         SettingsStore.showTouches(this@MainActivity),
                     )
                     viewModel.update { it.copy(showTouches = enabled) }
+                }
+                CaptureContract.ACTION_AUTO_STATE -> {
+                    refreshStorageSnapshot()
                 }
                 CaptureContract.ACTION_SCREEN_FINISHED,
                 CaptureContract.ACTION_CAMERA_FINISHED -> {
@@ -201,9 +213,14 @@ class MainActivity : ComponentActivity() {
                 overlayEnabled = FloatingOverlayService.isRunning,
             )
         }
+        if (savedInstanceState == null) {
+            SettingsStore.incrementAppOpens(this)
+        }
+        ShakeAndKeyStopDetector.start(this)
         refreshPermissionSnapshot()
         refreshStorageSnapshot()
         syncServiceStates()
+        refreshGitHubStats()
         setContent {
             val state = viewModel.state.collectAsStateWithLifecycle().value
             MainScreen(
@@ -221,7 +238,11 @@ class MainActivity : ComponentActivity() {
                 onDisableOverlay = { disableFloatingOverlay() },
                 onTakeScreenshot = { requestScreenCapture(CaptureContract.MODE_SCREENSHOT) },
                 onTakePartialScreenshot = { requestPartialScreenCapture(CaptureContract.MODE_PARTIAL_SCREENSHOT) },
+                onTakeLongScreenshot = { requestScreenCapture(CaptureContract.MODE_LONG_SCREENSHOT) },
                 onToggleScreenRecording = { toggleScreenRecording() },
+                onPauseResumeScreenRecording = {
+                    CaptureIntents.togglePauseScreenCapture(this)
+                },
                 onTogglePartialScreenRecording = { togglePartialScreenRecording() },
                 onToggleCameraRecording = { toggleCameraRecording() },
                 onAudioModeSelected = { mode -> setAudioMode(mode) },
@@ -236,6 +257,134 @@ class MainActivity : ComponentActivity() {
                 onOpenBrush = { BrushOverlay.toggle(this) },
                 onToggleHwGlBypass = { enabled -> setHwGlBypass(enabled) },
                 onOpenWebBypass = { openWebBypass() },
+                onOpenAccessibilitySettings = {
+                    ScreenKitAutoService.openAccessibilitySettings(this)
+                },
+                onLaunchAutoTool = { mode -> launchOrToggleAutoTool(mode) },
+                onDismissAutoTool = {
+                    AutoClickScrollOverlay.dismiss()
+                    refreshStorageSnapshot()
+                },
+                onAutoModeSelected = { mode ->
+                    SettingsStore.setAutoToolMode(this, mode)
+                    AutoClickScrollOverlay.refreshFromSettings(this)
+                    refreshStorageSnapshot()
+                },
+                onAutoClickPointCountChanged = { count ->
+                    SettingsStore.setAutoClickPointCount(this, count)
+                    AutoClickScrollOverlay.refreshFromSettings(this)
+                    refreshStorageSnapshot()
+                },
+                onAutoClickDelayChanged = { delayMs ->
+                    SettingsStore.setAutoClickDelayMs(this, delayMs)
+                    AutoClickScrollOverlay.refreshFromSettings(this)
+                    refreshStorageSnapshot()
+                },
+                onAutoClickSpeedChanged = { speedMs ->
+                    SettingsStore.setAutoClickSpeedMs(this, speedMs)
+                    AutoClickScrollOverlay.refreshFromSettings(this)
+                    refreshStorageSnapshot()
+                },
+                onAutoClickTapsPerPointChanged = { taps ->
+                    SettingsStore.setAutoClickTapsPerPoint(this, taps)
+                    AutoClickScrollOverlay.refreshFromSettings(this)
+                    refreshStorageSnapshot()
+                },
+                onAutoClickTotalCyclesChanged = { cycles ->
+                    SettingsStore.setAutoClickTotalCycles(this, cycles)
+                    AutoClickScrollOverlay.refreshFromSettings(this)
+                    refreshStorageSnapshot()
+                },
+                onAutoScrollDirectionChanged = { dir ->
+                    SettingsStore.setAutoScrollDirection(this, dir)
+                    AutoClickScrollOverlay.refreshFromSettings(this)
+                    refreshStorageSnapshot()
+                },
+                onAutoScrollSpeedChanged = { speedMs ->
+                    SettingsStore.setAutoScrollSpeedMs(this, speedMs)
+                    AutoClickScrollOverlay.refreshFromSettings(this)
+                    refreshStorageSnapshot()
+                },
+                onAutoScrollIntervalChanged = { intervalMs ->
+                    SettingsStore.setAutoScrollIntervalMs(this, intervalMs)
+                    AutoClickScrollOverlay.refreshFromSettings(this)
+                    refreshStorageSnapshot()
+                },
+                onAutoScrollDurationChanged = { durSec ->
+                    SettingsStore.setAutoScrollDurationSec(this, durSec)
+                    AutoClickScrollOverlay.refreshFromSettings(this)
+                    refreshStorageSnapshot()
+                },
+                onAutoScrollDistanceChanged = { distPct ->
+                    SettingsStore.setAutoScrollDistancePct(this, distPct)
+                    AutoClickScrollOverlay.refreshFromSettings(this)
+                    refreshStorageSnapshot()
+                },
+                onToggleAutoJitter = { enabled ->
+                    SettingsStore.setAutoRandomJitter(this, enabled)
+                    refreshStorageSnapshot()
+                },
+                onToggleAutoColorTrigger = { enabled ->
+                    SettingsStore.setAutoColorTriggerEnabled(this, enabled)
+                    AutoClickScrollOverlay.refreshFromSettings(this)
+                    refreshStorageSnapshot()
+                },
+                onSelectColorTriggerHex = { hex ->
+                    SettingsStore.setAutoColorTriggerHex(this, hex)
+                    SettingsStore.setAutoColorTriggerEnabled(this, true)
+                    AutoClickScrollOverlay.refreshFromSettings(this)
+                    refreshStorageSnapshot()
+                },
+                onLoadAutoProfile = { slot ->
+                    val name = SettingsStore.loadProfileSlot(this, slot)
+                    AutoClickScrollOverlay.refreshFromSettings(this)
+                    refreshStorageSnapshot()
+                    if (name != null) showMessage("Loaded profile: $name")
+                },
+                onSaveAutoProfile = { slot ->
+                    SettingsStore.saveCurrentToProfileSlot(this, slot)
+                    refreshStorageSnapshot()
+                    showMessage("Saved current Auto settings & pin positions to Slot $slot!")
+                },
+                onToggleShakeToStop = { enabled ->
+                    SettingsStore.setShakeToStopEnabled(this, enabled)
+                    refreshStorageSnapshot()
+                },
+                onToggleVolumeKeyStop = { enabled ->
+                    SettingsStore.setVolumeKeyStopEnabled(this, enabled)
+                    refreshStorageSnapshot()
+                },
+                onToggleTeleprompter = {
+                    CreatorToolsOverlay.toggleTeleprompter(this) { refreshStorageSnapshot() }
+                },
+                onTeleprompterScriptChanged = { script ->
+                    SettingsStore.setTeleprompterScript(this, script)
+                    refreshStorageSnapshot()
+                },
+                onToggleMagnifier = {
+                    CreatorToolsOverlay.toggleMagnifier(this) { refreshStorageSnapshot() }
+                },
+                onToggleWatermark = { enabled ->
+                    SettingsStore.setWatermarkEnabled(this, enabled)
+                    CreatorToolsOverlay.syncWatermark(this)
+                    refreshStorageSnapshot()
+                },
+                onWatermarkTextChanged = { text ->
+                    SettingsStore.setWatermarkText(this, text)
+                    CreatorToolsOverlay.syncWatermark(this)
+                    refreshStorageSnapshot()
+                },
+                onCheckForUpdates = {
+                    refreshGitHubStats(showToast = true)
+                },
+                onDownloadLatestApk = { url ->
+                    UpdateAndStatsManager.openLatestApkDownload(this, url)
+                },
+                onRefreshLibrary = { msg ->
+                    showMessage(msg)
+                    refreshStorageSnapshot()
+                    refreshRecentMedia()
+                },
             )
         }
 
@@ -297,6 +446,7 @@ class MainActivity : ComponentActivity() {
             addAction(CaptureContract.ACTION_CAMERA_STATE)
             addAction(CaptureContract.ACTION_CAMERA_FINISHED)
             addAction(CaptureContract.ACTION_TOUCH_STATE)
+            addAction(CaptureContract.ACTION_AUTO_STATE)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(permissionReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
@@ -383,19 +533,66 @@ class MainActivity : ComponentActivity() {
                 cameraFacing = if (SettingsStore.cameraFront(this)) CameraFacing.FRONT else CameraFacing.BACK,
                 showTouches = SettingsStore.showTouches(this),
                 hwGlBypass = SettingsStore.hwGlBypass(this),
+                autoAccessibilityEnabled = ScreenKitAutoService.isServiceEnabled(this),
+                autoOverlayShowing = AutoClickScrollOverlay.isShowing,
+                autoExecuting = AutoClickScrollOverlay.isExecuting,
+                autoToolMode = SettingsStore.autoToolMode(this),
+                autoClickPointCount = SettingsStore.autoClickPointCount(this),
+                autoClickDelayMs = SettingsStore.autoClickDelayMs(this),
+                autoClickSpeedMs = SettingsStore.autoClickSpeedMs(this),
+                autoClickTapsPerPoint = SettingsStore.autoClickTapsPerPoint(this),
+                autoClickTotalCycles = SettingsStore.autoClickTotalCycles(this),
+                autoScrollDirection = SettingsStore.autoScrollDirection(this),
+                autoScrollSpeedMs = SettingsStore.autoScrollSpeedMs(this),
+                autoScrollIntervalMs = SettingsStore.autoScrollIntervalMs(this),
+                autoScrollDurationSec = SettingsStore.autoScrollDurationSec(this),
+                autoScrollDistancePct = SettingsStore.autoScrollDistancePct(this),
+                autoRandomJitter = SettingsStore.autoRandomJitter(this),
+                autoColorTriggerEnabled = SettingsStore.autoColorTriggerEnabled(this),
+                autoColorTriggerHex = SettingsStore.autoColorTriggerHex(this),
+                autoMacroStepCount = SettingsStore.loadMacroSteps(this).size,
+                autoSavedProfiles = SettingsStore.listSavedProfiles(this),
+                shakeToStopEnabled = SettingsStore.shakeToStopEnabled(this),
+                volumeKeyStopEnabled = SettingsStore.volumeKeyStopEnabled(this),
+                teleprompterShowing = CreatorToolsOverlay.isTeleprompterShowing,
+                teleprompterScript = SettingsStore.teleprompterScript(this),
+                magnifierShowing = CreatorToolsOverlay.isMagnifierShowing,
+                watermarkEnabled = SettingsStore.watermarkEnabled(this),
+                watermarkText = SettingsStore.watermarkText(this),
+                statAppOpens = SettingsStore.statAppOpens(this),
+                statCapturesSaved = SettingsStore.statCapturesSaved(this),
+                statAutoGestures = SettingsStore.statAutoGestures(this),
             )
+        }
+    }
+
+    private fun refreshGitHubStats(showToast: Boolean = false) {
+        lifecycleScope.launch {
+            val summary = withContext(Dispatchers.IO) {
+                UpdateAndStatsManager.fetchReleaseSummary(this@MainActivity)
+            }
+            viewModel.update { it.copy(githubReleaseSummary = summary) }
+            if (showToast) {
+                if (summary.updateAvailable) {
+                    showMessage("New update ${summary.latestTag} is available! Tap 'Download Latest APK'.")
+                } else {
+                    showMessage("You are on the latest release (${summary.latestTag}) · ${summary.totalApkDownloads} total APK downloads.")
+                }
+            }
         }
     }
 
     private fun syncServiceStates() {
         val screenActive = ScreenCaptureService.isActive
         val screenRecording = ScreenCaptureService.isRecording
+        val screenPaused = ScreenCaptureService.isPaused
         val screenMode = ScreenCaptureService.activeMode
         val cameraActive = CameraCaptureService.isActive
         viewModel.update { old ->
             old.copy(
                 screenSessionActive = screenActive,
                 screenRecording = screenActive && screenRecording,
+                screenPaused = screenActive && screenRecording && screenPaused,
                 screenshotInProgress = screenActive && screenMode == "screenshot",
                 screenRecordingStartedAt = if (screenRecording) ScreenCaptureService.recordingStartedAt else 0L,
                 cameraSessionActive = cameraActive,
@@ -467,7 +664,10 @@ class MainActivity : ComponentActivity() {
             showMessage("Finish the active capture before starting another one.")
             return
         }
-        if (mode == CaptureContract.MODE_SCREENSHOT || mode == CaptureContract.MODE_PARTIAL_SCREENSHOT) {
+        if (mode == CaptureContract.MODE_SCREENSHOT ||
+            mode == CaptureContract.MODE_PARTIAL_SCREENSHOT ||
+            mode == CaptureContract.MODE_LONG_SCREENSHOT
+        ) {
             screenshotFlowPending = true
             FloatingOverlayService.setHiddenForScreenshot(this, true)
         }
@@ -744,6 +944,30 @@ class MainActivity : ComponentActivity() {
         runCatching { startActivity(intent) }
     }
 
+    private fun launchOrToggleAutoTool(mode: AutoToolMode) {
+        if (!Settings.canDrawOverlays(this)) {
+            overlaySettingsPending = true
+            requestOverlaySettings()
+            return
+        }
+        SettingsStore.setAutoToolMode(this, mode)
+        AutoClickScrollOverlay.show(this, mode) {
+            refreshStorageSnapshot()
+        }
+        refreshStorageSnapshot()
+        if (!ScreenKitAutoService.isServiceEnabled(this)) {
+            showMessage("Enable 'ScreenKit Auto Click & Scroll' in Accessibility Settings so ▶ Start can perform gestures.")
+        } else {
+            showMessage(
+                if (mode == AutoToolMode.CLICK) {
+                    "Drag targets 1 → ${SettingsStore.autoClickPointCount(this)} to position, then tap ▶ Start!"
+                } else {
+                    "Auto Scroller (${SettingsStore.autoScrollDirection(this).label}) ready — tap ▶ Start on the floating bar!"
+                },
+            )
+        }
+    }
+
     // ------------------------------------------------------------------ floating control
 
     private fun ensureFloatingOverlayVisible() {
@@ -831,6 +1055,8 @@ class MainActivity : ComponentActivity() {
                 continueScreenCaptureAfterPermissions(CaptureContract.MODE_SCREENSHOT)
             flow == "screen:${CaptureContract.MODE_PARTIAL_SCREENSHOT}" ->
                 continueScreenCaptureAfterPermissions(CaptureContract.MODE_PARTIAL_SCREENSHOT)
+            flow == "screen:${CaptureContract.MODE_LONG_SCREENSHOT}" ->
+                continueScreenCaptureAfterPermissions(CaptureContract.MODE_LONG_SCREENSHOT)
             flow == "screen:${CaptureContract.MODE_SCREEN_RECORDING}" ->
                 continueScreenCaptureAfterPermissions(CaptureContract.MODE_SCREEN_RECORDING)
             flow == "screen:${CaptureContract.MODE_PARTIAL_SCREEN_RECORDING}" ->

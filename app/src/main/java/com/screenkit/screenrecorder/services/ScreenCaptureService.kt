@@ -38,6 +38,7 @@ import com.screenkit.screenrecorder.data.CaptureAudioMode
 import com.screenkit.screenrecorder.data.CaptureKind
 import com.screenkit.screenrecorder.data.CaptureSink
 import com.screenkit.screenrecorder.data.SettingsStore
+import com.screenkit.screenrecorder.ui.CreatorToolsOverlay
 import com.screenkit.screenrecorder.ui.TouchFeedbackOverlay
 import java.io.IOException
 import java.io.OutputStream
@@ -78,6 +79,10 @@ class ScreenCaptureService : Service() {
     private var outputDescriptor: ParcelFileDescriptor? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var mode: Mode? = null
+    private var isLongScreenshotMode = false
+    private val longScreenshotFrames = mutableListOf<Bitmap>()
+    private var longScreenshotNextCaptureElapsed = 0L
+    private var longScreenshotScrollInFlight = false
     @Volatile private var sessionActive = false
     @Volatile private var finishing = false
     private var recorderStarted = false
@@ -117,7 +122,9 @@ class ScreenCaptureService : Service() {
 
     companion object {
         const val ACTION_SCREENSHOT = "com.screenkit.screenrecorder.screen.SCREENSHOT"
+        const val ACTION_LONG_SCREENSHOT = "com.screenkit.screenrecorder.screen.LONG_SCREENSHOT"
         const val ACTION_START_RECORDING = "com.screenkit.screenrecorder.screen.START_RECORDING"
+        const val ACTION_PAUSE_RESUME = "com.screenkit.screenrecorder.screen.PAUSE_RESUME"
         const val ACTION_STOP = "com.screenkit.screenrecorder.screen.STOP"
 
         private const val CHANNEL_ID = "screen_capture"
@@ -132,6 +139,8 @@ class ScreenCaptureService : Service() {
         @Volatile var isActive: Boolean = false
             private set
         @Volatile var isRecording: Boolean = false
+            private set
+        @Volatile var isPaused: Boolean = false
             private set
         @Volatile var activeMode: String = ""
             private set
@@ -158,7 +167,13 @@ class ScreenCaptureService : Service() {
                 }
                 return START_NOT_STICKY
             }
-            ACTION_SCREENSHOT, ACTION_START_RECORDING -> Unit
+            ACTION_PAUSE_RESUME -> {
+                if (sessionActive && mode == Mode.VIDEO && isRecording) {
+                    togglePauseResume()
+                }
+                return START_NOT_STICKY
+            }
+            ACTION_SCREENSHOT, ACTION_LONG_SCREENSHOT, ACTION_START_RECORDING -> Unit
             else -> {
                 stopSelf(startId)
                 return START_NOT_STICKY
@@ -166,9 +181,13 @@ class ScreenCaptureService : Service() {
         }
         if (sessionActive) return START_NOT_STICKY
 
-        mode = if (intent.action == ACTION_SCREENSHOT) Mode.SCREENSHOT else Mode.VIDEO
+        isLongScreenshotMode = intent.action == ACTION_LONG_SCREENSHOT
+        longScreenshotFrames.clear()
+        longScreenshotScrollInFlight = false
+        mode = if (intent.action == ACTION_SCREENSHOT || isLongScreenshotMode) Mode.SCREENSHOT else Mode.VIDEO
         sessionActive = true
         finishing = false
+        isPaused = false
         recorderStarted = false
         screenshotClaimed.set(false)
         skippedInitialFrames = 0
@@ -291,12 +310,39 @@ class ScreenCaptureService : Service() {
         }
 
         TouchFeedbackOverlay.sync(this)
+        CreatorToolsOverlay.syncWatermark(this)
+        ShakeAndKeyStopDetector.start(this)
         isRecording = true
+        isPaused = false
         recordingStartedAt = System.currentTimeMillis()
         broadcastState()
         updateNotification(recording = true)
         mainHandler.removeCallbacks(notificationTicker)
         mainHandler.postDelayed(notificationTicker, 1_000L)
+    }
+
+    private fun togglePauseResume() {
+        val screenEngine = engine
+        val mediaRecorder = recorder
+        if (!isPaused) {
+            if (screenEngine != null) {
+                screenEngine.pause()
+                isPaused = true
+            } else if (mediaRecorder != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                runCatching { mediaRecorder.pause() }
+                isPaused = true
+            }
+        } else {
+            if (screenEngine != null) {
+                screenEngine.resume()
+                isPaused = false
+            } else if (mediaRecorder != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                runCatching { mediaRecorder.resume() }
+                isPaused = false
+            }
+        }
+        broadcastState()
+        updateNotification(recording = true)
     }
 
     private fun startMediaRecorderRecording(
@@ -551,12 +597,42 @@ class ScreenCaptureService : Service() {
                 return
             }
 
+            // Multi-frame vertical stitch for Scrolling Long Screenshot mode!
+            if (isLongScreenshotMode && ScreenKitAutoService.instance != null && longScreenshotFrames.size < 3) {
+                if (longScreenshotScrollInFlight || now < longScreenshotNextCaptureElapsed) {
+                    cropped.recycle()
+                    return
+                }
+                longScreenshotFrames.add(cropped)
+                if (longScreenshotFrames.size < 3) {
+                    longScreenshotScrollInFlight = true
+                    val w = cropped.width.toFloat()
+                    val h = cropped.height.toFloat()
+                    mainHandler.post {
+                        val svc = ScreenKitAutoService.instance
+                        if (svc != null && sessionActive && !finishing) {
+                            svc.performSwipe(w * 0.5f, h * 0.72f, w * 0.5f, h * 0.28f, 380L) {
+                                longScreenshotNextCaptureElapsed = SystemClock.elapsedRealtime() + 450L
+                                longScreenshotScrollInFlight = false
+                            }
+                        } else {
+                            longScreenshotScrollInFlight = false
+                        }
+                    }
+                    return
+                }
+            }
+
             if (!screenshotClaimed.compareAndSet(false, true)) {
                 cropped.recycle()
                 return
             }
 
-            var finalBitmap = cropped
+            var finalBitmap = if (isLongScreenshotMode && longScreenshotFrames.size >= 2) {
+                stitchVerticalBitmaps(longScreenshotFrames)
+            } else {
+                cropped
+            }
             var finalBlank = isBlack
             if (finalBlank) {
                 // Attempt hardware/shell screencap fallback if MediaProjection returned a black frame
@@ -568,6 +644,7 @@ class ScreenCaptureService : Service() {
                 }
             }
 
+            CreatorToolsOverlay.updateSampleBitmap(finalBitmap)
             bitmap = finalBitmap
             val saved = saveScreenshot(finalBitmap)
             mainHandler.post {
@@ -679,6 +756,36 @@ class ScreenCaptureService : Service() {
                 }
             }
         }
+    }
+
+    private fun stitchVerticalBitmaps(frames: List<Bitmap>): Bitmap {
+        if (frames.isEmpty()) error("No frames to stitch.")
+        if (frames.size == 1) return frames.first()
+        val width = frames.first().width
+        val singleH = frames.first().height
+        // Trim top 12% (status/app bar) and bottom 12% (nav bar) on subsequent frames so content stitches seamlessly
+        val cropTop = (singleH * 0.12f).toInt()
+        val cropBottom = (singleH * 0.88f).toInt()
+        val middleSliceH = (cropBottom - cropTop).coerceAtLeast(100)
+        val totalHeight = singleH + (frames.size - 1) * middleSliceH
+
+        val result = Bitmap.createBitmap(width, totalHeight, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(result)
+        var currentY = 0
+        frames.forEachIndexed { idx, bmp ->
+            if (idx == 0) {
+                canvas.drawBitmap(bmp, 0f, 0f, null)
+                currentY += singleH
+            } else {
+                val src = android.graphics.Rect(0, cropTop, width, cropBottom.coerceAtMost(bmp.height))
+                val dst = android.graphics.Rect(0, currentY, width, currentY + middleSliceH)
+                canvas.drawBitmap(bmp, src, dst, null)
+                currentY += middleSliceH
+            }
+            bmp.recycle()
+        }
+        frames.toMutableList().clear()
+        return result
     }
 
     private fun cropBitmapIfNeeded(src: Bitmap): Bitmap {
@@ -831,8 +938,13 @@ class ScreenCaptureService : Service() {
         sessionActive = false
         isActive = false
         isRecording = false
+        isPaused = false
         activeMode = ""
         recordingStartedAt = 0L
+
+        if (success) {
+            SettingsStore.incrementCapturesSaved(this)
+        }
 
         if (mode == Mode.SCREENSHOT) {
             // Restore floating overlay window after screenshot finishes
@@ -939,13 +1051,24 @@ class ScreenCaptureService : Service() {
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
 
         if (recording) {
+            val pauseResume = PendingIntent.getService(
+                this,
+                403,
+                Intent(this, ScreenCaptureService::class.java).setAction(ACTION_PAUSE_RESUME),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            builder.addAction(
+                if (isPaused) android.R.drawable.ic_media_play else android.R.drawable.ic_media_pause,
+                if (isPaused) "Resume" else "Pause",
+                pauseResume,
+            )
             val stop = PendingIntent.getService(
                 this,
                 402,
                 Intent(this, ScreenCaptureService::class.java).setAction(ACTION_STOP),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
-            builder.addAction(android.R.drawable.ic_media_pause, "Stop", stop)
+            builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stop)
         }
         return builder.build()
     }
@@ -981,6 +1104,7 @@ class ScreenCaptureService : Service() {
                 .setPackage(packageName)
                 .putExtra(CaptureContract.EXTRA_ACTIVE, sessionActive)
                 .putExtra(CaptureContract.EXTRA_RECORDING, isRecording)
+                .putExtra(CaptureContract.EXTRA_PAUSED, isPaused)
                 .putExtra(CaptureContract.EXTRA_MODE, activeMode)
                 .putExtra(CaptureContract.EXTRA_STARTED_AT, recordingStartedAt),
         )

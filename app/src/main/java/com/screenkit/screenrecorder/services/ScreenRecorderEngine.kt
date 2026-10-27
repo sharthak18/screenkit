@@ -74,6 +74,10 @@ internal class ScreenRecorderEngine(
     @Volatile private var wroteVideoSample = false
     @Volatile private var totalAudioSamplesFed = 0L
     @Volatile private var lastAudioInputPtsUs = 0L
+    @Volatile var isPaused: Boolean = false
+        private set
+    private var pauseStartedAtRawVideoUs = -1L
+    private var totalPausedVideoUs = 0L
     private var muxer: MediaMuxer? = null
     private var inputSurface: Surface? = null
     private var videoDrain: Thread? = null
@@ -113,6 +117,22 @@ internal class ScreenRecorderEngine(
 
         muxer = createMuxer() ?: throw IllegalStateException("Could not open the recording output.")
         prepared = true
+    }
+
+    fun pause() {
+        if (!captureActive.get() || isPaused) return
+        isPaused = true
+    }
+
+    fun resume() {
+        if (!captureActive.get() || !isPaused) return
+        isPaused = false
+        runCatching {
+            val params = android.os.Bundle().apply {
+                putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
+            }
+            videoCodec?.setParameters(params)
+        }
     }
 
     fun start() {
@@ -479,6 +499,12 @@ internal class ScreenRecorderEngine(
         val dev = deviceSource
 
         while (captureActive.get() && !audioAbandoned) {
+            if (isPaused) {
+                mic?.queue?.clear()
+                dev?.queue?.clear()
+                runCatching { Thread.sleep(20L) }
+                continue
+            }
             val micChunk: ShortArray?
             val devChunk: ShortArray?
 
@@ -636,6 +662,17 @@ internal class ScreenRecorderEngine(
     }
 
     private fun handleSample(isVideo: Boolean, buffer: ByteBuffer, info: MediaCodec.BufferInfo) {
+        if (isPaused) {
+            if (isVideo && pauseStartedAtRawVideoUs < 0L) {
+                pauseStartedAtRawVideoUs = info.presentationTimeUs
+            }
+            return
+        }
+        if (isVideo && pauseStartedAtRawVideoUs >= 0L) {
+            val delta = (info.presentationTimeUs - pauseStartedAtRawVideoUs).coerceAtLeast(0L)
+            totalPausedVideoUs += delta
+            pauseStartedAtRawVideoUs = -1L
+        }
         val track = if (isVideo) videoTrackIndex else audioTrackIndex
         val ptsUs = if (isVideo) videoPtsUs(info.presentationTimeUs) else audioPtsUs(info.presentationTimeUs)
         synchronized(muxerLock) {
@@ -687,7 +724,7 @@ internal class ScreenRecorderEngine(
      */
     private fun videoPtsUs(rawUs: Long): Long {
         if (firstVideoRawUs < 0L) firstVideoRawUs = rawUs
-        val elapsed = (rawUs - firstVideoRawUs).coerceAtLeast(0L)
+        val elapsed = (rawUs - firstVideoRawUs - totalPausedVideoUs).coerceAtLeast(0L)
         val next = if (elapsed > lastVideoPtsUs) elapsed else lastVideoPtsUs + 100L
         lastVideoPtsUs = next
         return next

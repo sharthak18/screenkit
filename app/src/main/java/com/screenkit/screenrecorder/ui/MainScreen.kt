@@ -12,10 +12,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import com.screenkit.screenrecorder.data.AutoScrollDirection
+import com.screenkit.screenrecorder.data.AutoToolMode
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.ChevronRight
@@ -41,6 +44,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -58,6 +62,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -110,7 +115,9 @@ internal fun MainScreen(
     onDisableOverlay: () -> Unit,
     onTakeScreenshot: () -> Unit,
     onTakePartialScreenshot: () -> Unit,
+    onTakeLongScreenshot: () -> Unit = {},
     onToggleScreenRecording: () -> Unit,
+    onPauseResumeScreenRecording: () -> Unit = {},
     onTogglePartialScreenRecording: () -> Unit,
     onToggleCameraRecording: () -> Unit,
     onAudioModeSelected: (CaptureAudioMode) -> Unit,
@@ -125,7 +132,38 @@ internal fun MainScreen(
     onOpenBrush: () -> Unit,
     onToggleHwGlBypass: (Boolean) -> Unit = {},
     onOpenWebBypass: () -> Unit = {},
+    onOpenAccessibilitySettings: () -> Unit = {},
+    onLaunchAutoTool: (AutoToolMode) -> Unit = {},
+    onDismissAutoTool: () -> Unit = {},
+    onAutoModeSelected: (AutoToolMode) -> Unit = {},
+    onAutoClickPointCountChanged: (Int) -> Unit = {},
+    onAutoClickDelayChanged: (Long) -> Unit = {},
+    onAutoClickSpeedChanged: (Long) -> Unit = {},
+    onAutoClickTapsPerPointChanged: (Int) -> Unit = {},
+    onAutoClickTotalCyclesChanged: (Int) -> Unit = {},
+    onAutoScrollDirectionChanged: (AutoScrollDirection) -> Unit = {},
+    onAutoScrollSpeedChanged: (Long) -> Unit = {},
+    onAutoScrollIntervalChanged: (Long) -> Unit = {},
+    onAutoScrollDurationChanged: (Int) -> Unit = {},
+    onAutoScrollDistanceChanged: (Int) -> Unit = {},
+    onToggleAutoJitter: (Boolean) -> Unit = {},
+    onToggleAutoColorTrigger: (Boolean) -> Unit = {},
+    onSelectColorTriggerHex: (String) -> Unit = {},
+    onLoadAutoProfile: (Int) -> Unit = {},
+    onSaveAutoProfile: (Int) -> Unit = {},
+    onToggleShakeToStop: (Boolean) -> Unit = {},
+    onToggleVolumeKeyStop: (Boolean) -> Unit = {},
+    onToggleTeleprompter: () -> Unit = {},
+    onTeleprompterScriptChanged: (String) -> Unit = {},
+    onToggleMagnifier: () -> Unit = {},
+    onToggleWatermark: (Boolean) -> Unit = {},
+    onWatermarkTextChanged: (String) -> Unit = {},
+    onCheckForUpdates: () -> Unit = {},
+    onDownloadLatestApk: (String) -> Unit = {},
+    onRefreshLibrary: (String) -> Unit = {},
 ) {
+    val context = LocalContext.current
+    var studioCapture by remember { mutableStateOf<MediaCapture?>(null) }
     ScreenKitTheme {
         Box(Modifier.fillMaxSize().background(Night)) {
             Column(
@@ -142,10 +180,44 @@ internal fun MainScreen(
                     state = state,
                     onTakeScreenshot = onTakeScreenshot,
                     onTakePartialScreenshot = onTakePartialScreenshot,
+                    onTakeLongScreenshot = onTakeLongScreenshot,
                     onToggleScreenRecording = onToggleScreenRecording,
+                    onPauseResumeScreenRecording = onPauseResumeScreenRecording,
                     onTogglePartialScreenRecording = onTogglePartialScreenRecording,
                     onToggleCameraRecording = onToggleCameraRecording,
                     onProjectionScopeSelected = onProjectionScopeSelected,
+                )
+                AutoClickScrollCard(
+                    state = state,
+                    onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                    onLaunchAutoTool = onLaunchAutoTool,
+                    onDismissAutoTool = onDismissAutoTool,
+                    onAutoModeSelected = onAutoModeSelected,
+                    onAutoClickPointCountChanged = onAutoClickPointCountChanged,
+                    onAutoClickDelayChanged = onAutoClickDelayChanged,
+                    onAutoClickSpeedChanged = onAutoClickSpeedChanged,
+                    onAutoClickTapsPerPointChanged = onAutoClickTapsPerPointChanged,
+                    onAutoClickTotalCyclesChanged = onAutoClickTotalCyclesChanged,
+                    onAutoScrollDirectionChanged = onAutoScrollDirectionChanged,
+                    onAutoScrollSpeedChanged = onAutoScrollSpeedChanged,
+                    onAutoScrollIntervalChanged = onAutoScrollIntervalChanged,
+                    onAutoScrollDurationChanged = onAutoScrollDurationChanged,
+                    onAutoScrollDistanceChanged = onAutoScrollDistanceChanged,
+                    onToggleAutoJitter = onToggleAutoJitter,
+                    onToggleAutoColorTrigger = onToggleAutoColorTrigger,
+                    onSelectColorTriggerHex = onSelectColorTriggerHex,
+                    onLoadAutoProfile = onLoadAutoProfile,
+                    onSaveAutoProfile = onSaveAutoProfile,
+                )
+                CreatorAndSmartToolsCard(
+                    state = state,
+                    onToggleTeleprompter = onToggleTeleprompter,
+                    onTeleprompterScriptChanged = onTeleprompterScriptChanged,
+                    onToggleMagnifier = onToggleMagnifier,
+                    onToggleWatermark = onToggleWatermark,
+                    onWatermarkTextChanged = onWatermarkTextChanged,
+                    onToggleShakeToStop = onToggleShakeToStop,
+                    onToggleVolumeKeyStop = onToggleVolumeKeyStop,
                 )
                 BrushToolCard(onOpenBrush = onOpenBrush)
                 TouchesCard(showTouches = state.showTouches, onToggleShowTouches = onToggleShowTouches)
@@ -158,9 +230,29 @@ internal fun MainScreen(
                 SoundCard(state, onAudioModeSelected)
                 SaveLocationCard(state, onSaveModeSelected, onVolumeSelected, onPickFolder)
                 FloatingControlsCard(state, onEnableOverlay, onDisableOverlay)
-                RecentCaptures(state.recentCaptures, onOpenCapture)
+                RecentCaptures(
+                    items = state.recentCaptures,
+                    onOpen = onOpenCapture,
+                    onOpenStudio = { capture -> studioCapture = capture },
+                )
+                UsageStatsAndUpdaterCard(
+                    state = state,
+                    onCheckForUpdates = onCheckForUpdates,
+                    onDownloadLatestApk = onDownloadLatestApk,
+                )
                 PrivacyNote()
                 Spacer(Modifier.height(8.dp))
+            }
+
+            studioCapture?.let { selectedVideo ->
+                VideoStudioDialog(
+                    context = context,
+                    capture = selectedVideo,
+                    onDismiss = { studioCapture = null },
+                    onCompleted = { message ->
+                        onRefreshLibrary(message)
+                    },
+                )
             }
 
             if (showOverlayWelcome) {
@@ -302,7 +394,7 @@ private fun PermissionsCard(state: CaptureUiState) {
             Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
                 PermissionPill("Notifications", state.notificationPermission, Modifier.weight(1f))
                 PermissionPill("Storage", state.storagePermission, Modifier.weight(1f))
-                PermissionPill("Consent", false, Modifier.weight(1f), labelWhenOff = "Per capture")
+                PermissionPill("Auto Tap", state.autoAccessibilityEnabled, Modifier.weight(1f), labelWhenOff = "Enable in Auto")
             }
         }
     }
@@ -339,7 +431,9 @@ private fun CaptureActions(
     state: CaptureUiState,
     onTakeScreenshot: () -> Unit,
     onTakePartialScreenshot: () -> Unit,
+    onTakeLongScreenshot: () -> Unit,
     onToggleScreenRecording: () -> Unit,
+    onPauseResumeScreenRecording: () -> Unit,
     onTogglePartialScreenRecording: () -> Unit,
     onToggleCameraRecording: () -> Unit,
     onProjectionScopeSelected: (ProjectionScope) -> Unit,
@@ -356,7 +450,12 @@ private fun CaptureActions(
                     ActionIcon(Icons.Filled.FiberManualRecord, Color(0xFFFF6671), "rec")
                     Column(Modifier.padding(start = 12.dp).weight(1f)) {
                         Text("Screen recording", color = SoftWhite, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                        Text("H.264 MP4 · Full or partial area crop", color = Muted, fontSize = 11.sp)
+                        Text(
+                            if (state.screenPaused) "PAUSED · Tap Resume to continue recording"
+                            else "H.264 MP4 · Full or partial area · Pause/Resume supported",
+                            color = if (state.screenPaused) Color(0xFFFFC857) else Muted,
+                            fontSize = 11.sp,
+                        )
                     }
                     if (state.screenRecording) {
                         RecordingTimer(state.screenRecordingStartedAt)
@@ -375,13 +474,27 @@ private fun CaptureActions(
                         onClick = onToggleScreenRecording,
                         modifier = Modifier.weight(1f),
                     )
-                    if (!state.screenRecording) {
+                    if (state.screenRecording) {
+                        OutlinedButton(
+                            onClick = onPauseResumeScreenRecording,
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = if (state.screenPaused) Lime else Color(0xFFFFC857),
+                            ),
+                            modifier = Modifier.height(53.dp),
+                        ) {
+                            Text(
+                                if (state.screenPaused) "▶ Resume" else "⏸ Pause",
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    } else {
                         OutlinedButton(
                             onClick = onTogglePartialScreenRecording,
                             enabled = !state.screenSessionActive && !state.cameraRecording,
                             shape = RoundedCornerShape(14.dp),
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = Lime),
-                            modifier = Modifier.height(48.dp),
+                            modifier = Modifier.height(53.dp),
                         ) {
                             Text("Select area", fontWeight = FontWeight.Bold)
                         }
@@ -393,28 +506,39 @@ private fun CaptureActions(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     ActionIcon(Icons.Filled.PhotoCamera, Lime, "shot")
                     Column(Modifier.padding(start = 12.dp).weight(1f)) {
-                        Text("Screenshot", color = SoftWhite, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                        Text("PNG · Full screen or drag to select area", color = Muted, fontSize = 11.sp)
+                        Text("Screenshot & Long Stitch", color = SoftWhite, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        Text("PNG · Full, Crop, or Auto-Scrolling 3-Page Stitch", color = Muted, fontSize = 11.sp)
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        OutlinedButton(
-                            onClick = onTakePartialScreenshot,
-                            enabled = !state.screenSessionActive && !state.cameraRecording,
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Lime),
-                        ) {
-                            Text("Crop", fontWeight = FontWeight.Bold)
-                        }
-                        OutlinedButton(
-                            onClick = onTakeScreenshot,
-                            enabled = !state.screenSessionActive && !state.cameraRecording,
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Lime),
-                        ) {
-                            Icon(Icons.Filled.PhotoCamera, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Full", fontWeight = FontWeight.Bold)
-                        }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = onTakePartialScreenshot,
+                        enabled = !state.screenSessionActive && !state.cameraRecording,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Lime),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Crop", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                    OutlinedButton(
+                        onClick = onTakeLongScreenshot,
+                        enabled = !state.screenSessionActive && !state.cameraRecording,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF8FE0C1)),
+                        modifier = Modifier.weight(1.3f),
+                    ) {
+                        Text("⇅ Long Stitch", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                    OutlinedButton(
+                        onClick = onTakeScreenshot,
+                        enabled = !state.screenSessionActive && !state.cameraRecording,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Lime),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(Icons.Filled.PhotoCamera, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Full", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
                 }
             }
@@ -772,6 +896,612 @@ private fun CameraDropdown(
 }
 
 @Composable
+private fun AutoClickScrollCard(
+    state: CaptureUiState,
+    onOpenAccessibilitySettings: () -> Unit,
+    onLaunchAutoTool: (AutoToolMode) -> Unit,
+    onDismissAutoTool: () -> Unit,
+    onAutoModeSelected: (AutoToolMode) -> Unit,
+    onAutoClickPointCountChanged: (Int) -> Unit,
+    onAutoClickDelayChanged: (Long) -> Unit,
+    onAutoClickSpeedChanged: (Long) -> Unit,
+    onAutoClickTapsPerPointChanged: (Int) -> Unit,
+    onAutoClickTotalCyclesChanged: (Int) -> Unit,
+    onAutoScrollDirectionChanged: (AutoScrollDirection) -> Unit,
+    onAutoScrollSpeedChanged: (Long) -> Unit,
+    onAutoScrollIntervalChanged: (Long) -> Unit,
+    onAutoScrollDurationChanged: (Int) -> Unit,
+    onAutoScrollDistanceChanged: (Int) -> Unit,
+    onToggleAutoJitter: (Boolean) -> Unit,
+    onToggleAutoColorTrigger: (Boolean) -> Unit,
+    onSelectColorTriggerHex: (String) -> Unit,
+    onLoadAutoProfile: (Int) -> Unit,
+    onSaveAutoProfile: (Int) -> Unit,
+) {
+    Card(
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = Panel),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Edge),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(17.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            SectionHeading(
+                "AUTO CLICKER · SCROLLER · MACRO RECORDER",
+                "Sequential pins (1 → 2 → 3…), timed scrolling (↑/↓/←/→), touch macro replay, profiles & color trigger",
+            )
+
+            // Accessibility Gesture Engine status banner
+            Surface(
+                color = if (state.autoAccessibilityEnabled) Color(0xFF17241C) else Color(0xFF231D20),
+                shape = RoundedCornerShape(14.dp),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    if (state.autoAccessibilityEnabled) Lime.copy(alpha = 0.6f) else Color(0xFF6A454C),
+                ),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(9.dp)
+                            .clip(CircleShape)
+                            .background(if (state.autoAccessibilityEnabled) Lime else Red),
+                    )
+                    Column(Modifier.padding(start = 10.dp).weight(1f)) {
+                        Text(
+                            text = if (state.autoAccessibilityEnabled) {
+                                "Gesture Service Ready"
+                            } else {
+                                "Enable Gesture Service in Accessibility"
+                            },
+                            color = SoftWhite,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = if (state.autoAccessibilityEnabled) {
+                                "Auto Click, Auto Scroll & Macro Replay can run over any app"
+                            } else {
+                                "Required once so ScreenKit can tap, scroll & replay macros"
+                            },
+                            color = Muted,
+                            fontSize = 10.sp,
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = onOpenAccessibilitySettings,
+                        shape = RoundedCornerShape(11.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Lime),
+                    ) {
+                        Text(
+                            if (state.autoAccessibilityEnabled) "Settings" else "Enable",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+            }
+
+            // 3 Mode Tabs: Auto Clicker vs Auto Scroller vs Touch Macro Recorder
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                AutoChoiceChip(
+                    label = "⊕ Click (1→2…)",
+                    selected = state.autoToolMode == AutoToolMode.CLICK,
+                    onClick = { onAutoModeSelected(AutoToolMode.CLICK) },
+                    modifier = Modifier.weight(1f),
+                )
+                AutoChoiceChip(
+                    label = "⇅ Scroll (↑/↓)",
+                    selected = state.autoToolMode == AutoToolMode.SCROLL,
+                    onClick = { onAutoModeSelected(AutoToolMode.SCROLL) },
+                    modifier = Modifier.weight(1f),
+                )
+                AutoChoiceChip(
+                    label = "● Macro (${state.autoMacroStepCount})",
+                    selected = state.autoToolMode == AutoToolMode.MACRO,
+                    onClick = { onAutoModeSelected(AutoToolMode.MACRO) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            HorizontalDivider(color = Edge.copy(alpha = 0.7f))
+
+            when (state.autoToolMode) {
+                AutoToolMode.CLICK -> {
+                    // 1. Number of click positions (1 -> 2 -> 3 -> 4...)
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Click sequence positions (1 → ${state.autoClickPointCount})",
+                                color = SoftWhite,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                "Drag numbered pins 1, 2, 3, 4… to where it should tap in order",
+                                color = Muted,
+                                fontSize = 10.sp,
+                            )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedButton(
+                                onClick = { onAutoClickPointCountChanged((state.autoClickPointCount - 1).coerceAtLeast(1)) },
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Lime),
+                            ) {
+                                Text("－", fontWeight = FontWeight.ExtraBold)
+                            }
+                            Text(
+                                "${state.autoClickPointCount}",
+                                color = Lime,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                modifier = Modifier.padding(horizontal = 4.dp),
+                            )
+                            OutlinedButton(
+                                onClick = { onAutoClickPointCountChanged((state.autoClickPointCount + 1).coerceAtMost(20)) },
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Lime),
+                            ) {
+                                Text("＋", fontWeight = FontWeight.ExtraBold)
+                            }
+                        }
+                    }
+
+                    // 2. Delay between Click 1 -> Click 2 -> Click 3
+                    val delayChoices = listOf(
+                        100L to "100ms",
+                        250L to "250ms",
+                        500L to "0.5s",
+                        1000L to "1s",
+                        2000L to "2s",
+                        3000L to "3s",
+                        5000L to "5s",
+                    )
+                    AutoSettingChipRow(
+                        title = "Delay between clicks (1 → 2 → 3): ${state.autoClickDelayMs}ms",
+                        options = delayChoices.map { it.second },
+                        selectedIndex = delayChoices.indexOfFirst { it.first == state.autoClickDelayMs },
+                        onSelect = { idx -> onAutoClickDelayChanged(delayChoices[idx].first) },
+                    )
+
+                    // 3. Clicking speed (tap press duration)
+                    val speedChoices = listOf(
+                        25L to "Turbo 25ms",
+                        55L to "Fast 55ms",
+                        110L to "Normal 110ms",
+                        250L to "Slow 250ms",
+                        600L to "Hold 600ms",
+                    )
+                    AutoSettingChipRow(
+                        title = "Clicking speed (tap hold): ${state.autoClickSpeedMs}ms",
+                        options = speedChoices.map { it.second },
+                        selectedIndex = speedChoices.indexOfFirst { it.first == state.autoClickSpeedMs },
+                        onSelect = { idx -> onAutoClickSpeedChanged(speedChoices[idx].first) },
+                    )
+
+                    // 4. How many times each position taps before moving to the next
+                    val tapChoices = listOf(1, 2, 3, 5, 10, 20)
+                    AutoSettingChipRow(
+                        title = "Taps at each position before next: ${state.autoClickTapsPerPoint}×",
+                        options = tapChoices.map { "${it}×" },
+                        selectedIndex = tapChoices.indexOf(state.autoClickTapsPerPoint),
+                        onSelect = { idx -> onAutoClickTapsPerPointChanged(tapChoices[idx]) },
+                    )
+
+                    // 5. Total cycles / how many times the whole sequence repeats
+                    val cycleChoices = listOf(
+                        1 to "1×",
+                        5 to "5×",
+                        10 to "10×",
+                        25 to "25×",
+                        50 to "50×",
+                        100 to "100×",
+                        0 to "Infinite ∞",
+                    )
+                    AutoSettingChipRow(
+                        title = "How many times to repeat sequence: ${if (state.autoClickTotalCycles == 0) "Infinite ∞" else "${state.autoClickTotalCycles} cycles"}",
+                        options = cycleChoices.map { it.second },
+                        selectedIndex = cycleChoices.indexOfFirst { it.first == state.autoClickTotalCycles },
+                        onSelect = { idx -> onAutoClickTotalCyclesChanged(cycleChoices[idx].first) },
+                    )
+                }
+
+                AutoToolMode.SCROLL -> {
+                    val dirs = AutoScrollDirection.values().toList()
+                    AutoSettingChipRow(
+                        title = "Scroll direction: ${state.autoScrollDirection.label}",
+                        options = dirs.map { "${it.arrow} ${it.shortLabel}" },
+                        selectedIndex = dirs.indexOf(state.autoScrollDirection),
+                        onSelect = { idx -> onAutoScrollDirectionChanged(dirs[idx]) },
+                    )
+
+                    val scrollSpeeds = listOf(
+                        160L to "⚡ Very Fast",
+                        300L to "Fast",
+                        450L to "Normal",
+                        850L to "Slow",
+                        1400L to "🐢 Reading Slow",
+                    )
+                    AutoSettingChipRow(
+                        title = "Scroll swipe speed (fast/slow): ${state.autoScrollSpeedMs}ms",
+                        options = scrollSpeeds.map { it.second },
+                        selectedIndex = scrollSpeeds.indexOfFirst { it.first == state.autoScrollSpeedMs },
+                        onSelect = { idx -> onAutoScrollSpeedChanged(scrollSpeeds[idx].first) },
+                    )
+
+                    val scrollIntervals = listOf(
+                        600L to "0.6s",
+                        1000L to "1s",
+                        1500L to "1.5s",
+                        2500L to "2.5s",
+                        4000L to "4s",
+                        8000L to "8s",
+                    )
+                    AutoSettingChipRow(
+                        title = "Pause delay between scrolls: ${state.autoScrollIntervalMs}ms",
+                        options = scrollIntervals.map { it.second },
+                        selectedIndex = scrollIntervals.indexOfFirst { it.first == state.autoScrollIntervalMs },
+                        onSelect = { idx -> onAutoScrollIntervalChanged(scrollIntervals[idx].first) },
+                    )
+
+                    val scrollDurations = listOf(
+                        30 to "30 sec",
+                        60 to "1 min",
+                        120 to "2 min",
+                        300 to "5 min",
+                        600 to "10 min",
+                        1800 to "30 min",
+                        0 to "Infinite ∞",
+                    )
+                    AutoSettingChipRow(
+                        title = "How long scrolling will run: ${if (state.autoScrollDurationSec == 0) "Infinite ∞" else "${state.autoScrollDurationSec}s"}",
+                        options = scrollDurations.map { it.second },
+                        selectedIndex = scrollDurations.indexOfFirst { it.first == state.autoScrollDurationSec },
+                        onSelect = { idx -> onAutoScrollDurationChanged(scrollDurations[idx].first) },
+                    )
+
+                    val scrollDistances = listOf(
+                        30 to "Short (30%)",
+                        55 to "Medium (55%)",
+                        75 to "Long (75%)",
+                    )
+                    AutoSettingChipRow(
+                        title = "Scroll swipe distance: ${state.autoScrollDistancePct}%",
+                        options = scrollDistances.map { it.second },
+                        selectedIndex = scrollDistances.indexOfFirst { it.first == state.autoScrollDistancePct },
+                        onSelect = { idx -> onAutoScrollDistanceChanged(scrollDistances[idx].first) },
+                    )
+                }
+
+                AutoToolMode.MACRO -> {
+                    Surface(
+                        color = PanelRaised,
+                        shape = RoundedCornerShape(14.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Edge),
+                    ) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                "Touch Macro Recorder (${state.autoMacroStepCount} steps saved)",
+                                color = Lime,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                "1. Launch the Macro Overlay below.\n2. Tap ● Rec on the floating bar and perform any sequence of taps & swipes.\n3. Tap ■ Done, then tap ▶ Play to replay your exact touch choreography!",
+                                color = Muted,
+                                fontSize = 11.sp,
+                                lineHeight = 16.sp,
+                            )
+                        }
+                    }
+
+                    val cycleChoices = listOf(
+                        1 to "1×",
+                        5 to "5×",
+                        10 to "10×",
+                        25 to "25×",
+                        50 to "50×",
+                        100 to "100×",
+                        0 to "Infinite ∞",
+                    )
+                    AutoSettingChipRow(
+                        title = "Macro replay repeat cycles: ${if (state.autoClickTotalCycles == 0) "Infinite ∞" else "${state.autoClickTotalCycles} cycles"}",
+                        options = cycleChoices.map { it.second },
+                        selectedIndex = cycleChoices.indexOfFirst { it.first == state.autoClickTotalCycles },
+                        onSelect = { idx -> onAutoClickTotalCyclesChanged(cycleChoices[idx].first) },
+                    )
+                }
+            }
+
+            HorizontalDivider(color = Edge.copy(alpha = 0.7f))
+
+            // Saved Profiles (Slots 1..3 Load & Save)
+            Text("Saved Profiles & Presets (Load or Save Current Layout)", color = SoftWhite, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                for (slot in 1..3) {
+                    val profile = state.autoSavedProfiles.firstOrNull { it.slot == slot }
+                    val label = profile?.name ?: "Slot $slot"
+                    OutlinedButton(
+                        onClick = { onLoadAutoProfile(slot) },
+                        shape = RoundedCornerShape(11.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Lime),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(label, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                for (slot in 1..3) {
+                    TextButton(
+                        onClick = { onSaveAutoProfile(slot) },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("💾 Save → #$slot", color = Color(0xFF8FE0C1), fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            HorizontalDivider(color = Edge.copy(alpha = 0.7f))
+
+            // Anti-Detection Randomization (Human Jitter)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Anti-Detection Human Jitter", color = SoftWhite, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Randomizes tap coordinates (±4px) and timing (±12%) for natural human patterns", color = Muted, fontSize = 10.sp)
+                }
+                Switch(
+                    checked = state.autoRandomJitter,
+                    onCheckedChange = onToggleAutoJitter,
+                )
+            }
+
+            // Smart Color / Pixel Trigger
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Smart Color / Pixel Trigger (${state.autoColorTriggerHex})", color = SoftWhite, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Waits until Pin #1 matches target #HEX color (or use Eyedropper Loupe below)", color = Muted, fontSize = 10.sp)
+                }
+                Switch(
+                    checked = state.autoColorTriggerEnabled,
+                    onCheckedChange = onToggleAutoColorTrigger,
+                )
+            }
+            if (state.autoColorTriggerEnabled) {
+                val presetColors = listOf("#4CAF50", "#FF5252", "#2196F3", "#FFC107", "#FFFFFF")
+                AutoSettingChipRow(
+                    title = "Target trigger #HEX color: ${state.autoColorTriggerHex}",
+                    options = presetColors,
+                    selectedIndex = presetColors.indexOfFirst { it.equals(state.autoColorTriggerHex, ignoreCase = true) },
+                    onSelect = { idx -> onSelectColorTriggerHex(presetColors[idx]) },
+                )
+            }
+
+            // Launch / Close buttons
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(
+                    onClick = { onLaunchAutoTool(state.autoToolMode) },
+                    modifier = Modifier.weight(1f).height(48.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink),
+                ) {
+                    Text(
+                        text = when (state.autoToolMode) {
+                            AutoToolMode.CLICK ->
+                                if (state.autoOverlayShowing) "Update Auto Clicker (1→${state.autoClickPointCount})"
+                                else "Launch Auto Clicker (1→${state.autoClickPointCount})"
+                            AutoToolMode.SCROLL ->
+                                if (state.autoOverlayShowing) "Update Auto Scroller (${state.autoScrollDirection.arrow})"
+                                else "Launch Auto Scroller (${state.autoScrollDirection.arrow} ${state.autoScrollDirection.shortLabel})"
+                            AutoToolMode.MACRO ->
+                                if (state.autoOverlayShowing) "Update Macro Recorder (${state.autoMacroStepCount} steps)"
+                                else "Launch Touch Macro Recorder"
+                        },
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                    )
+                }
+                if (state.autoOverlayShowing) {
+                    OutlinedButton(
+                        onClick = onDismissAutoTool,
+                        modifier = Modifier.height(48.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Red),
+                    ) {
+                        Text("Close", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CreatorAndSmartToolsCard(
+    state: CaptureUiState,
+    onToggleTeleprompter: () -> Unit,
+    onTeleprompterScriptChanged: (String) -> Unit,
+    onToggleMagnifier: () -> Unit,
+    onToggleWatermark: (Boolean) -> Unit,
+    onWatermarkTextChanged: (String) -> Unit,
+    onToggleShakeToStop: (Boolean) -> Unit,
+    onToggleVolumeKeyStop: (Boolean) -> Unit,
+) {
+    var editingScript by remember { mutableStateOf(false) }
+    var editingWatermark by remember { mutableStateOf(false) }
+    Card(
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = Panel),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Edge),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(17.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            SectionHeading(
+                "CREATOR OVERLAYS & SMART SHORTCUTS",
+                "Floating Teleprompter, Magnifier & Color Eyedropper, Watermark & Shake/Volume Stop",
+            )
+
+            // 1. Floating Teleprompter
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Floating Teleprompter / Script", color = SoftWhite, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text("Auto-scrolling script overlay with speed & font controls (hides from screenshots)", color = Muted, fontSize = 10.5.sp)
+                }
+                TextButton(onClick = { editingScript = !editingScript }) {
+                    Text(if (editingScript) "Done" else "Edit Script", color = Color(0xFF8FE0C1), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+                Button(
+                    onClick = onToggleTeleprompter,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (state.teleprompterShowing) Red else Lime,
+                        contentColor = if (state.teleprompterShowing) Color.White else Ink,
+                    ),
+                ) {
+                    Text(if (state.teleprompterShowing) "Close" else "Open", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            }
+            if (editingScript) {
+                OutlinedTextField(
+                    value = state.teleprompterScript,
+                    onValueChange = onTeleprompterScriptChanged,
+                    label = { Text("Teleprompter Script") },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 5,
+                )
+            }
+
+            HorizontalDivider(color = Edge.copy(alpha = 0.7f))
+
+            // 2. On-Screen Magnifier & Color Picker (Eyedropper)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Magnifier Loupe & Color Eyedropper", color = SoftWhite, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text("3× zoom crosshair inspecting live (X,Y) & #HEX pixel color · 1-tap bind to Auto Clicker", color = Muted, fontSize = 10.5.sp)
+                }
+                Button(
+                    onClick = onToggleMagnifier,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (state.magnifierShowing) Red else Lime,
+                        contentColor = if (state.magnifierShowing) Color.White else Ink,
+                    ),
+                ) {
+                    Text(if (state.magnifierShowing) "Close" else "Open", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            }
+
+            HorizontalDivider(color = Edge.copy(alpha = 0.7f))
+
+            // 3. Custom Watermark / Creator Branding
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Creator Watermark Badge", color = SoftWhite, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text("Draggable branding badge (“${state.watermarkText}”) over screen recordings", color = Muted, fontSize = 10.5.sp)
+                }
+                TextButton(onClick = { editingWatermark = !editingWatermark }) {
+                    Text(if (editingWatermark) "Done" else "Edit Text", color = Color(0xFF8FE0C1), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+                Switch(
+                    checked = state.watermarkEnabled,
+                    onCheckedChange = onToggleWatermark,
+                )
+            }
+            if (editingWatermark) {
+                OutlinedTextField(
+                    value = state.watermarkText,
+                    onValueChange = onWatermarkTextChanged,
+                    label = { Text("Watermark Handle / Brand Text") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            HorizontalDivider(color = Edge.copy(alpha = 0.7f))
+
+            // 4. Shake Phone & Volume-Down Emergency Stop
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Shake Phone to Stop Recording / Auto-Clicker", color = SoftWhite, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Shake your phone to immediately stop screen recording or active auto-clicking", color = Muted, fontSize = 10.sp)
+                }
+                Switch(
+                    checked = state.shakeToStopEnabled,
+                    onCheckedChange = onToggleShakeToStop,
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Volume-Down Emergency Stop for Auto-Clicker", color = SoftWhite, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Press physical Volume Down button anytime to halt Auto Clicker / Scroller / Macro", color = Muted, fontSize = 10.sp)
+                }
+                Switch(
+                    checked = state.volumeKeyStopEnabled,
+                    onCheckedChange = onToggleVolumeKeyStop,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AutoSettingChipRow(
+    title: String,
+    options: List<String>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(title, color = SoftWhite, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            options.forEachIndexed { idx, label ->
+                AutoChoiceChip(
+                    label = label,
+                    selected = idx == selectedIndex,
+                    onClick = { onSelect(idx) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AutoChoiceChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier,
+        color = if (selected) Color(0xFF1D2A1F) else PanelRaised,
+        shape = RoundedCornerShape(11.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, if (selected) Lime else Edge),
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
+            color = if (selected) Lime else SoftWhite,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
 private fun BrushToolCard(onOpenBrush: () -> Unit) {
     Card(
         shape = RoundedCornerShape(21.dp),
@@ -948,12 +1678,16 @@ private fun FloatingControlsCard(
 }
 
 @Composable
-private fun RecentCaptures(items: List<MediaCapture>, onOpen: (MediaCapture) -> Unit) {
+private fun RecentCaptures(
+    items: List<MediaCapture>,
+    onOpen: (MediaCapture) -> Unit,
+    onOpenStudio: (MediaCapture) -> Unit,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("YOUR LIBRARY", color = Lime, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
-                Text("Recent captures", color = SoftWhite, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text("YOUR LIBRARY & VIDEO STUDIO", color = Lime, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                Text("Recent captures (Tap ✂ Studio on videos to Trim / GIF / Frame)", color = SoftWhite, fontSize = 15.sp, fontWeight = FontWeight.Bold)
             }
             Text("ON DEVICE", color = Muted, fontSize = 9.sp, letterSpacing = 0.7.sp)
         }
@@ -966,17 +1700,21 @@ private fun RecentCaptures(items: List<MediaCapture>, onOpen: (MediaCapture) -> 
                 Column(Modifier.fillMaxWidth().padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Filled.FolderOpen, contentDescription = null, tint = Lime, modifier = Modifier.size(26.dp))
                     Text("Nothing saved yet", modifier = Modifier.padding(top = 9.dp), color = SoftWhite, fontWeight = FontWeight.Bold)
-                    Text("Your screenshots and MP4 videos will appear here.", color = Muted, fontSize = 12.sp)
+                    Text("Your screenshots, stitched pages, GIFs, and MP4 videos will appear here.", color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center)
                 }
             }
         } else {
-            items.forEach { capture -> CaptureRow(capture, onOpen) }
+            items.forEach { capture -> CaptureRow(capture, onOpen, onOpenStudio) }
         }
     }
 }
 
 @Composable
-private fun CaptureRow(item: MediaCapture, onOpen: (MediaCapture) -> Unit) {
+private fun CaptureRow(
+    item: MediaCapture,
+    onOpen: (MediaCapture) -> Unit,
+    onOpenStudio: (MediaCapture) -> Unit,
+) {
     Card(
         onClick = { onOpen(item) },
         shape = RoundedCornerShape(17.dp),
@@ -995,14 +1733,149 @@ private fun CaptureRow(item: MediaCapture, onOpen: (MediaCapture) -> Unit) {
             Column(Modifier.padding(start = 11.dp).weight(1f)) {
                 Text(item.title, color = SoftWhite, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 val kind = when (item.kind) {
-                    CaptureKind.SCREENSHOT -> "PNG · Full resolution"
+                    CaptureKind.SCREENSHOT -> "PNG / GIF · Image"
                     CaptureKind.SCREEN_RECORDING -> "MP4 · Screen"
                     CaptureKind.CAMERA_RECORDING -> "MP4 · Camera"
                 }
                 Text("$kind · ${formatBytes(item.sizeBytes)}", color = Muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(formatCaptureDate(item.dateAddedSeconds), color = Color(0xFF72817A), fontSize = 10.sp)
             }
+            if (item.kind.isVideo) {
+                OutlinedButton(
+                    onClick = { onOpenStudio(item) },
+                    shape = RoundedCornerShape(11.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Lime),
+                    modifier = Modifier.padding(end = 6.dp),
+                ) {
+                    Text("✂ Studio", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
             Icon(Icons.Filled.ChevronRight, contentDescription = "Open capture", tint = Muted)
+        }
+    }
+}
+
+@Composable
+private fun UsageStatsAndUpdaterCard(
+    state: CaptureUiState,
+    onCheckForUpdates: () -> Unit,
+    onDownloadLatestApk: (String) -> Unit,
+) {
+    val summary = state.githubReleaseSummary
+    Card(
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = Panel),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Edge),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(17.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            SectionHeading(
+                "LIVE ANALYTICS & IN-APP UPDATER",
+                "Local usage telemetry & live GitHub Release APK download counter",
+            )
+
+            // 4-Stat Grid
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                StatMetricBox(
+                    value = "${state.statAppOpens}",
+                    label = "App Opens",
+                    modifier = Modifier.weight(1f),
+                )
+                StatMetricBox(
+                    value = "${state.statCapturesSaved}",
+                    label = "Captures Saved",
+                    modifier = Modifier.weight(1f),
+                )
+                StatMetricBox(
+                    value = "${state.statAutoGestures}",
+                    label = "Auto Gestures",
+                    modifier = Modifier.weight(1f),
+                )
+                StatMetricBox(
+                    value = if (summary != null) "${summary.totalApkDownloads}" else "…",
+                    label = "APK Downloads",
+                    modifier = Modifier.weight(1f),
+                    highlight = true,
+                )
+            }
+
+            if (summary != null) {
+                Surface(color = PanelRaised, shape = RoundedCornerShape(12.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(11.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "Installed: v${summary.currentVersion}  ·  Latest on GitHub: ${summary.latestTag}",
+                            color = if (summary.updateAvailable) Lime else SoftWhite,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = summary.releaseBreakdown,
+                            color = Muted,
+                            fontSize = 10.sp,
+                        )
+                    }
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = onCheckForUpdates,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(13.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Lime),
+                ) {
+                    Text("↻ Check Updates & Stats", fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+                }
+                Button(
+                    onClick = { onDownloadLatestApk(summary?.latestApkUrl ?: "https://github.com/sharthak18/ScreenKit/releases/latest/download/ScreenKit.apk") },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(13.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink),
+                ) {
+                    Text(
+                        if (summary?.updateAvailable == true) "⬇ Update (${summary.latestTag})" else "⬇ Latest APK",
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatMetricBox(
+    value: String,
+    label: String,
+    modifier: Modifier = Modifier,
+    highlight: Boolean = false,
+) {
+    Surface(
+        modifier = modifier,
+        color = if (highlight) Color(0xFF17251D) else PanelRaised,
+        shape = RoundedCornerShape(13.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, if (highlight) Lime.copy(alpha = 0.6f) else Edge),
+    ) {
+        Column(
+            modifier = Modifier.padding(vertical = 10.dp, horizontal = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = value,
+                color = if (highlight) Lime else SoftWhite,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.ExtraBold,
+            )
+            Text(
+                text = label,
+                color = Muted,
+                fontSize = 9.sp,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
