@@ -54,7 +54,9 @@ class TcpStreamSocketImp(
       builder.tls(Dispatchers.Default) {
         // SNI and certificate hostname verification (Ktor only verifies names when supplied).
         serverName = host.removePrefix("[").removeSuffix("]")
-        trustManager = certificate
+        trustManager = if (certificate is javax.net.ssl.X509TrustManager) {
+          HostnameTrustManager(host, certificate)
+        } else HostnameTrustManager(host)
         random = SecureRandom()
       }
     } else builder
@@ -69,7 +71,9 @@ class TcpStreamSocketImp(
       address = null
       input = null
       output = null
-      socket?.close()
+      val current = socket
+      socket = null
+      current?.close()
       selectorManager.close()
     } catch (ignored: Exception) {}
   }

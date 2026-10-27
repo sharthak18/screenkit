@@ -59,6 +59,20 @@ class FloatingOverlayService : Service() {
     private var windowManager: WindowManager? = null
     private var overlayRoot: LinearLayout? = null
     private var overlayParams: WindowManager.LayoutParams? = null
+    private var liveStatusLabel: TextView? = null
+    private val liveTicker = object : Runnable {
+        override fun run() {
+            val label = liveStatusLabel ?: return
+            if (!ScreenCaptureService.isLive) return
+            val status = com.screenkit.screenrecorder.streaming.LiveStreamSession.status.value
+            val seconds = if (status.startedAt == 0L) 0L else
+                ((System.currentTimeMillis() - status.startedAt) / 1000).coerceAtLeast(0L)
+            label.text = if (status.connected) {
+                "LIVE · %02d:%02d · %d kbps%s".format(seconds / 60, seconds % 60, status.bitrate / 1000, if (status.muted) " · MUTED" else "")
+            } else "Connecting to live server…"
+            mainHandler.postDelayed(this, 1000L)
+        }
+    }
     private var expanded = false
     private var screenRecording = false
     private var cameraRecording = false
@@ -325,6 +339,8 @@ class FloatingOverlayService : Service() {
         val manager = windowManager ?: return
         val metrics = realDisplayMetrics()
         val beforeWidth = root.width
+        mainHandler.removeCallbacks(liveTicker)
+        liveStatusLabel = null
         root.removeAllViews()
         root.orientation = LinearLayout.HORIZONTAL
         root.gravity = Gravity.CENTER_VERTICAL
@@ -352,7 +368,7 @@ class FloatingOverlayService : Service() {
                 menu,
                 LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
-                    dp(CELL_HEIGHT_DP * 2),
+                    dp(CELL_HEIGHT_DP * 2 + if (ScreenCaptureService.isLive) 24 else 0),
                 ),
             )
             root.addView(
@@ -368,7 +384,7 @@ class FloatingOverlayService : Service() {
                     menu,
                     LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.WRAP_CONTENT,
-                        dp(CELL_HEIGHT_DP * 2),
+                        dp(CELL_HEIGHT_DP * 2 + if (ScreenCaptureService.isLive) 24 else 0),
                     ).apply { leftMargin = dp(4) },
                 )
             }
@@ -465,6 +481,16 @@ class FloatingOverlayService : Service() {
      */
     private fun makeMenu(): LinearLayout {
         val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        if (ScreenCaptureService.isLive) {
+            liveStatusLabel = TextView(this).apply {
+                textSize = 11f
+                setTextColor(0xFFFFD3D7.toInt())
+                gravity = Gravity.CENTER
+                setSingleLine(true)
+            }
+            column.addView(liveStatusLabel, LinearLayout.LayoutParams(dp(CELL_WIDTH_DP * COLUMNS), dp(24)))
+            mainHandler.post(liveTicker)
+        }
         val soundActive = SettingsStore.audioMode(this) != CaptureAudioMode.NONE
         val touchesActive = SettingsStore.showTouches(this)
         val brushActive = BrushOverlay.isShowing
@@ -1146,6 +1172,8 @@ class FloatingOverlayService : Service() {
     }
 
     private fun removeOverlay() {
+        mainHandler.removeCallbacks(liveTicker)
+        liveStatusLabel = null
         mainHandler.removeCallbacks(safetyRestoreRunnable)
         snapAnimator?.cancel()
         snapAnimator = null

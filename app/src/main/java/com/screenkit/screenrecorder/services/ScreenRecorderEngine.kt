@@ -113,7 +113,10 @@ internal class ScreenRecorderEngine(
             setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
             setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
-            if (publisher != null) setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+            if (publisher != null) {
+                setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, frameRate.toFloat())
+            }
             setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
             setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100_000L)
         }
@@ -234,13 +237,15 @@ internal class ScreenRecorderEngine(
             setInteger(MediaFormat.KEY_BIT_RATE, 128_000)
             setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16 * 1_024)
         }
+        var creatingCodec: MediaCodec? = null
         val codec = runCatching {
-            MediaCodec.createEncoderByType(AUDIO_MIME).apply {
+            MediaCodec.createEncoderByType(AUDIO_MIME).also { creatingCodec = it }.apply {
                 configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                 start()
             }
         }.getOrNull()
         if (codec == null) {
+            runCatching { creatingCodec?.release() }
             if (publisher != null) error("No AAC encoder is available for streaming.")
             onAudioUnavailable("No audio encoder is available; this recording is silent.")
             return
@@ -541,8 +546,9 @@ internal class ScreenRecorderEngine(
                 devChunk = runCatching { dev.queue.poll(22L, TimeUnit.MILLISECONDS) }.getOrNull()
                 micChunk = null
             } else {
-                // Live destinations still get a paced silent AAC track when sound is off.
-                runCatching { Thread.sleep(20L) }
+                // Pace by the sample clock rather than adding sleep + processing time (which drifts).
+                val dueAt = sessionStartElapsed + (totalAudioSamplesFed + SAMPLES_PER_CHUNK) * 1000L / SAMPLE_RATE
+                runCatching { Thread.sleep((dueAt - SystemClock.elapsedRealtime()).coerceIn(1L, 20L)) }
                 micChunk = null
                 devChunk = null
             }
@@ -591,7 +597,7 @@ internal class ScreenRecorderEngine(
             val ptsUs = (totalAudioSamplesFed * 1_000_000L) / SAMPLE_RATE.toLong()
             totalAudioSamplesFed += samplesInBuffer
             lastAudioInputPtsUs = ptsUs
-            runCatching { codec.queueInputBuffer(index, 0, size, ptsUs, 0) }
+            runCatching { codec.queueInputBuffer(index, 0, size, ptsUs, 0) }.onFailure { publisher?.encoderError() }
             offset += size
         }
     }

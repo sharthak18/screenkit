@@ -61,11 +61,23 @@ jobs:
             echo '<details><summary>Build log tail</summary>'
             echo
             echo '```text'
-            tail -c 30000 /tmp/gradle-build.log
+            tail -c 24000 /tmp/gradle-build.log
+            find app/build/test-results third_party/rootencoder -path '*/test-results/*/*.xml' -type f -exec grep -A 12 '<failure' {} \; 2>/dev/null | head -80 || true
             echo '```'
             echo '</details>'
           } > /tmp/diagnostics.md
           gh issue comment 4 --body-file /tmp/diagnostics.md
+
+      - name: Upload unit test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: |
+            app/build/reports/tests/
+            third_party/rootencoder/*/build/reports/tests/
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Name APK for download
         run: cp app/build/outputs/apk/debug/app-debug.apk ScreenKit.apk

@@ -15,7 +15,9 @@ Gradle files and manifests are adapted to ScreenKit's toolchain and minSdk 24.
   only suppresses packet logs; command logs include private stream names/keys.
 - `TcpStreamSocketImp` sets TLS `serverName`. Ktor 3.0.0 uses this for SNI **and
   certificate hostname verification**; without it only the certificate chain is checked.
-  Platform/system trust remains enabled; no trust-all manager is installed.
+  A strict SAN-based trust wrapper additionally rejects missing-name/IP SANs, which
+  Ktor 3.0.0 otherwise accepts. Platform/system trust remains enabled; no trust-all
+  manager is installed. Wildcards match exactly one leftmost label.
 - Own the raw TCP socket before TLS, ensuring failed/cancelled handshakes can close it.
   A null socket is no longer reported as connected.
 - `RtmpClient` reports read-side server failures to its connection callback, so the

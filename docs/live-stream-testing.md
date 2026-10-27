@@ -2,8 +2,9 @@
 
 ## Automated
 
-`gradle :app:testDebugUnitTest :app:assembleDebug` runs endpoint/quality/dimension tests
-and compiles the APK. Tests must pass before the APK publish step in CI.
+`gradle :stream-common:testDebugUnitTest :stream-rtmp:testDebugUnitTest :app:testDebugUnitTest :app:assembleDebug`
+runs endpoint/quality/dimension, real local TLS handshake, escaped token, and AVC
+packetization tests and compiles the APK. Tests must pass before the APK publish step in CI.
 
 ## Device / private-server tests (manual, require an Android device)
 

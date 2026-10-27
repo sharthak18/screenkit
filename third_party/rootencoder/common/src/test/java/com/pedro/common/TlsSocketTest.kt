@@ -37,9 +37,9 @@ class TlsSocketTest {
   @Test(timeout = 15000) fun acceptsTrustedMatchingHostname() = withServer { port, trust ->
     runBlocking {
       val socket = TcpStreamSocketImp("localhost", port, true, trust)
-      try { withTimeout(7000) { socket.connect() }; assertTrue(socket.isConnected()) }
+      try { withTimeout(7000) { socket.connect() }; assertTrue("TLS socket should be connected", socket.isConnected()) }
       finally { socket.close() }
-      assertFalse(socket.isConnected())
+      assertFalse("Closed socket must not report connected", socket.isConnected())
     }
   }
 
