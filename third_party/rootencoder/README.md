@@ -20,7 +20,8 @@ Gradle files and manifests are adapted to ScreenKit's toolchain and minSdk 24.
   manager is installed. Wildcards match exactly one leftmost label.
 - Own the raw TCP socket before TLS, ensuring failed/cancelled handshakes can close it.
   A null socket is no longer reported as connected.
-- `RtmpClient` reports read-side server failures to its connection callback, so the
+- `RtmpClient` starts its send queue before the success callback so the first keyframe
+  cannot be discarded by a startup race. It also reports read-side server failures to its connection callback, so the
   capture service shuts down instead of showing a stale LIVE status.
 - `UrlParser` preserves raw path/query encoding, preventing percent-escaped stream
   tokens from being decoded or duplicated. Transport supports one app/stream endpoint.

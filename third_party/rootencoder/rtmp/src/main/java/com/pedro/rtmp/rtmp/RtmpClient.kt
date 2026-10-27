@@ -468,12 +468,14 @@ class RtmpClient(private val connectChecker: ConnectChecker) {
               when (val code = command.getCode()) {
                 "NetStream.Publish.Start" -> {
                   commandsManager.sendMetadata(socket)
-                  onMainThread {
-                    connectChecker.onConnectionSuccess()
-                  }
+                  // ScreenKit: make the sender ready before allowing the first keyframe.
+                  // Otherwise the success callback races with start() clearing its queue.
                   rtmpSender.socket = socket
                   rtmpSender.start()
                   publishPermitted = true
+                  onMainThread {
+                    connectChecker.onConnectionSuccess()
+                  }
                 }
                 "NetConnection.Connect.Rejected", "NetStream.Publish.BadName" -> {
                   onMainThread {
