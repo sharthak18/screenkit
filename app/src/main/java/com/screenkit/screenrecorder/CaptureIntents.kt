@@ -50,6 +50,7 @@ internal object CaptureIntents {
                     CaptureContract.MODE_SCREENSHOT,
                     CaptureContract.MODE_PARTIAL_SCREENSHOT -> ScreenCaptureService.ACTION_SCREENSHOT
                     CaptureContract.MODE_LONG_SCREENSHOT -> ScreenCaptureService.ACTION_LONG_SCREENSHOT
+                    CaptureContract.MODE_LIVE_STREAM -> ScreenCaptureService.ACTION_START_LIVE
                     else -> ScreenCaptureService.ACTION_START_RECORDING
                 },
             )
@@ -162,10 +163,11 @@ internal object CaptureIntents {
         ) {
             required += Manifest.permission.POST_NOTIFICATIONS
         }
-        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P && !canWriteExternalStorage(context)) {
+        if (mode != CaptureContract.MODE_LIVE_STREAM && Build.VERSION.SDK_INT <= Build.VERSION_CODES.P && !canWriteExternalStorage(context)) {
             required += Manifest.permission.WRITE_EXTERNAL_STORAGE
         }
         when (mode) {
+            CaptureContract.MODE_LIVE_STREAM,
             CaptureContract.MODE_SCREEN_RECORDING,
             CaptureContract.MODE_PARTIAL_SCREEN_RECORDING -> {
                 if (SettingsStore.audioMode(context).requiresRecordPermission &&

@@ -61,6 +61,7 @@ object CaptureContract {
     /** Capture modes handled by [CaptureRequestActivity]. */
     const val MODE_SCREENSHOT = "screenshot"
     const val MODE_LONG_SCREENSHOT = "long_screenshot"
+    const val MODE_LIVE_STREAM = "live_stream"
     const val MODE_SCREEN_RECORDING = "screen_recording"
     const val MODE_CAMERA_RECORDING = "camera_recording"
     const val MODE_CAMERA_PREVIEW = "camera_preview"

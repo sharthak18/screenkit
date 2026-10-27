@@ -1,14 +1,14 @@
-# ScreenKit (v2.0.0)
+# ScreenKit (v2.1.0)
 
-A native, high-performance Android capture, creator studio & screen automation suite built with Modern Android Architecture (Jetpack Compose, CameraX, Foreground Services, Accessibility Gesture Engine, MediaProjection, OpenGL ES, MediaMuxer/MediaExtractor, and MediaCodec). ScreenKit v2.0.0 delivers screen recording with **Pause & Resume**, custom area cropping, **Scrolling Long Screenshots ("Stitch Full Page")**, built-in **MP4 Video Trimmer, Animated GIF Maker & PNG Frame Extractor**, sequential multi-target **Auto Clicking (`1 → 2 → 3 → 4…`)**, directional **Auto Scrolling (`↑ / ↓ / ← / →`)**, **Touch Macro Recorder & Replay**, **Saved Auto-Clicker Profiles (Slots 1–3)**, **Anti-Detection Human Jitter**, **Smart Color / Pixel Trigger (`#HEX`)**, **Floating Teleprompter**, **On-Screen Magnifier Loupe & Color Eyedropper**, **Creator Watermark Badge**, **Shake / Volume-Down Emergency Stop**, **Live Usage Analytics & One-Tap In-App Updater**, live interactive brush annotation, on-screen touch visualization, a draggable floating camera lens, amplified sound recording (Mic / Device Audio / Mixed), and a built-in Black-Screen Bypass Web Capture Browser.
+A native, high-performance Android capture, creator studio & screen automation suite built with Modern Android Architecture (Jetpack Compose, CameraX, Foreground Services, Accessibility Gesture Engine, MediaProjection, OpenGL ES, MediaMuxer/MediaExtractor, and MediaCodec). ScreenKit v2.1.0 delivers screen recording with **Pause & Resume**, custom area cropping, **Scrolling Long Screenshots ("Stitch Full Page")**, built-in **MP4 Video Trimmer, Animated GIF Maker & PNG Frame Extractor**, sequential multi-target **Auto Clicking (`1 → 2 → 3 → 4…`)**, directional **Auto Scrolling (`↑ / ↓ / ← / →`)**, **Touch Macro Recorder & Replay**, **Saved Auto-Clicker Profiles (Slots 1–3)**, **Anti-Detection Human Jitter**, **Smart Color / Pixel Trigger (`#HEX`)**, **Floating Teleprompter**, **On-Screen Magnifier Loupe & Color Eyedropper**, **Creator Watermark Badge**, **Shake / Volume-Down Emergency Stop**, **Live Usage Analytics & One-Tap In-App Updater**, live interactive brush annotation, on-screen touch visualization, a draggable floating camera lens, amplified sound recording (Mic / Device Audio / Mixed), and a built-in Black-Screen Bypass Web Capture Browser.
 
 ---
 
 ## Download and Install
 
-[⬇️ **Download the latest ScreenKit v2.0.0 APK**](https://github.com/sharthak18/ScreenKit/releases/latest/download/ScreenKit.apk)
+[⬇️ **Download the latest ScreenKit v2.1.0 APK**](https://github.com/sharthak18/ScreenKit/releases/latest/download/ScreenKit.apk)
 
-- **Current Version**: `v2.0.0` (`versionCode = 7`)
+- **Current Version**: `v2.1.0` (`versionCode = 7`)
 - Compatible with **Android 7.0 (API 24) to Android 15 (API 35)**.
 - Device Audio & Mixed (`Mic + Device`) playback capture supported on **Android 10+**.
 - Full screen scope and single-app exclusion selection supported on **Android 14+**.
@@ -16,7 +16,7 @@ A native, high-performance Android capture, creator studio & screen automation s
 
 ---
 
-## What's New in v2.0.0 (13 Major Features)
+## What's New in v2.1.0 (13 Major Features)
 
 1. **Touch Macro Recorder ("Record My Actions & Replay")**: Tap `● Macro` in the Auto tool, press `● Rec`, perform any real-time sequence of finger taps and swipes across the screen, tap `■ Done`, and replay your exact touch choreography (`1×` to `Infinite ∞`).
 2. **Saved Auto-Clicker Profiles & Presets (Slots 1–3)**: Save and load named pin positions, delays, speeds, and modes into 3 instant profile slots (pre-loaded with **TikTok/Reels Scroll**, **Game Farming 1→4**, and **Reader Slow Scroll**).
@@ -142,3 +142,51 @@ A native, high-performance Android capture, creator studio & screen automation s
 ## License
 
 This project is licensed under the Apache License 2.0. See the LICENSE file for details.
+
+## Go Live — v2.1.0
+
+ScreenKit can send your **screen** as H.264 video and AAC audio to a single RTMP/RTMPS
+server. This is an encoder connection, not YouTube/Facebook OAuth or a guarantee
+that your account has live-streaming access.
+
+1. In YouTube Live Control Room, Facebook Live Producer, or another compatible
+   platform, create a live broadcast and select streaming/encoder software.
+2. In ScreenKit's **Go Live** card choose a destination. Paste the exact **server
+   URL** and **stream key** from that platform as separate fields. Presets are
+   editable starting points. Prefer `rtmps://` (TLS) over unencrypted `rtmp://`.
+3. Choose 480p/720p/1080p, 24/30/60 fps, a video bitrate (500–12000 kbps), and sound:
+   off, microphone, device audio, or mixed. Resolution preserves screen aspect ratio,
+   does not upscale, and is capped at a 1920-pixel long edge; actual frame rate depends
+   on your device and screen updates. A good starting point is 720p / 30 fps / 2500 kbps.
+4. Enable Do Not Disturb, tap **Go Live**, review the privacy warning, and approve
+   Android screen sharing. Everything visible in the chosen screen/app can be sent,
+   including overlays and notifications. Protected/DRM content cannot be streamed.
+5. Wait for **LIVE · Sending to server**, then check the platform's preview. You may
+   need to click **Go Live** there to make it public. ScreenKit's timer and outgoing
+   bitrate describe the encoder connection, not viewer count or public visibility.
+6. **Mute audio** silences both microphone and device sound while preserving the AAC
+   track; unmute restores the sources chosen at startup. Use **End stream**, the
+   floating red LIVE bubble's Stop control, or the capture notification to stop.
+   Android's stop-sharing action and enabled shake/volume stop shortcuts also stop it.
+
+### Streaming limitations and privacy
+
+- Screen streaming is exclusive with screen recording, screenshots, and camera recording.
+  This version does not save a simultaneous local MP4, stream the camera as a separate source,
+  or send to multiple destinations at once. A visible camera overlay can appear in screen sharing.
+- Sound sources are selected before starting. Device playback capture needs Android 10+
+  and a source app that permits it. Denying audio permission gives a silent stream.
+- Watermarks and the teleprompter are ordinary screen overlays: if included in the shared
+  screen, viewers see them too. They are not private presenter-only layers.
+- Keys/destinations are held in process memory only, not saved in preferences, bundles,
+  backups, or analytics. The key field is masked and cleared when starting. Re-enter the key
+  for the next broadcast. Never share keys in screenshots, bug reports, or chat.
+- A 25-second connection timeout, bounded outgoing queue, and server disconnect/error
+  handling end failed sessions and release screen/audio capture. Reconnection is manual;
+  no stream silently restarts after a process death or network failure.
+- Network throughput, thermal limits, codec support, and platform account eligibility affect
+  compatibility. Test with a private/unlisted broadcast before going public.
+
+Transport uses the Apache-2.0 licensed [RootEncoder RTMP module, version 2.5.3](https://github.com/pedroSG94/RootEncoder/tree/2.5.3/rtmp),
+pinned for compatibility with this project's Kotlin toolchain. ScreenKit reuses its own
+MediaCodec screen encoder and mixed-audio capture pipeline; streaming does not write a temporary MP4.

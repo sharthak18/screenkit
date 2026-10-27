@@ -43,6 +43,7 @@ internal class ScreenRecorderEngine(
     private val descriptor: ParcelFileDescriptor?,
     private val file: File?,
     private val onAudioUnavailable: (String) -> Unit,
+    private val publisher: com.screenkit.screenrecorder.streaming.RtmpPublisher? = null,
 ) {
     private class CaptureSource(
         val record: AudioRecord,
@@ -90,6 +91,13 @@ internal class ScreenRecorderEngine(
     private var lastVideoPtsUs = -1L
     private var lastAudioPtsUs = -1L
     private var prepared = false
+    @Volatile var muted: Boolean = false
+
+    fun requestKeyFrame() {
+        runCatching { videoCodec?.setParameters(android.os.Bundle().apply {
+            putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
+        }) }
+    }
 
     /** Surface the caller feeds the display into. */
     val surface: Surface get() = inputSurface ?: error("The encoder surface is not ready.")
@@ -105,17 +113,22 @@ internal class ScreenRecorderEngine(
             setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
             setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+            if (publisher != null) setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
             setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
             setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100_000L)
         }
         val video = MediaCodec.createEncoderByType(VIDEO_MIME)
+        videoCodec = video // Owned immediately so a configure/prepare failure can release it.
         video.configure(videoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         val createdSurface = video.createInputSurface()
+        inputSurface = createdSurface
         video.start()
         videoCodec = video
         inputSurface = createdSurface
 
-        muxer = createMuxer() ?: throw IllegalStateException("Could not open the recording output.")
+        if (publisher == null) {
+            muxer = createMuxer() ?: throw IllegalStateException("Could not open the recording output.")
+        }
         prepared = true
     }
 
@@ -150,7 +163,7 @@ internal class ScreenRecorderEngine(
         audioCodec?.let { codec ->
             audioDrain = drainLoop(codec, isVideo = false).also { it.start() }
         }
-        if (audioSources.isNotEmpty()) {
+        if (audioCodec != null) {
             mixerThread = mixerLoop().also { it.start() }
         }
     }
@@ -211,7 +224,7 @@ internal class ScreenRecorderEngine(
     }
 
     private fun startAudioCapture() {
-        if (!audioMode.usesMicrophone && !audioMode.usesDeviceAudio) return
+        if (publisher == null && !audioMode.usesMicrophone && !audioMode.usesDeviceAudio) return
         if (audioMode.usesDeviceAudio && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             onAudioUnavailable("Device audio needs Android 10 or newer.")
         }
@@ -228,6 +241,7 @@ internal class ScreenRecorderEngine(
             }
         }.getOrNull()
         if (codec == null) {
+            if (publisher != null) error("No AAC encoder is available for streaming.")
             onAudioUnavailable("No audio encoder is available; this recording is silent.")
             return
         }
@@ -258,7 +272,7 @@ internal class ScreenRecorderEngine(
         if (wantsDevice && device == null) {
             onAudioUnavailable("Device audio was unavailable for this session.")
         }
-        if (microphone == null && device == null) {
+        if (microphone == null && device == null && publisher == null) {
             runCatching { codec.stop() }
             runCatching { codec.release() }
             if (wantsMicrophone || wantsDevice) {
@@ -527,7 +541,10 @@ internal class ScreenRecorderEngine(
                 devChunk = runCatching { dev.queue.poll(22L, TimeUnit.MILLISECONDS) }.getOrNull()
                 micChunk = null
             } else {
-                break
+                // Live destinations still get a paced silent AAC track when sound is off.
+                runCatching { Thread.sleep(20L) }
+                micChunk = null
+                devChunk = null
             }
 
             when {
@@ -556,7 +573,7 @@ internal class ScreenRecorderEngine(
         val codec = audioCodec ?: return
         if (audioAbandoned) return
         val bytes = ByteArray(length * 2)
-        ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(samples, 0, length)
+        if (!muted) ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(samples, 0, length)
         var offset = 0
         var attempts = 0
         while (captureActive.get() && offset < bytes.size) {
@@ -600,14 +617,18 @@ internal class ScreenRecorderEngine(
             val index = runCatching { codec.dequeueOutputBuffer(info, 10_000L) }
                 .getOrDefault(Int.MIN_VALUE)
             when {
-                index == Int.MIN_VALUE -> break
+                index == Int.MIN_VALUE -> {
+                    if (captureActive.get()) publisher?.encoderError()
+                    break
+                }
                 index == MediaCodec.INFO_TRY_AGAIN_LATER -> if (isVideo) nudgeAudioStart()
                 index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> registerTrack(codec, isVideo)
                 index >= 0 -> {
                     val buffer = runCatching { codec.getOutputBuffer(index) }.getOrNull()
                     val isConfig = info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
                     if (buffer != null && info.size > 0 && !isConfig) {
-                        handleSample(isVideo, buffer, info)
+                        try { handleSample(isVideo, buffer, info) }
+                        catch (_: Exception) { publisher?.encoderError() }
                     }
                     runCatching { codec.releaseOutputBuffer(index, false) }
                     if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) endOfStream = true
@@ -618,6 +639,10 @@ internal class ScreenRecorderEngine(
 
     private fun registerTrack(codec: MediaCodec, isVideo: Boolean) {
         val format = runCatching { codec.outputFormat }.getOrNull() ?: return
+        if (publisher != null) {
+            if (isVideo) runCatching { publisher.videoFormat(format) }.onFailure { publisher.encoderError() }
+            return
+        }
         synchronized(muxerLock) {
             val current = muxer ?: return
             if (muxerStarted) return
@@ -675,6 +700,12 @@ internal class ScreenRecorderEngine(
         }
         val track = if (isVideo) videoTrackIndex else audioTrackIndex
         val ptsUs = if (isVideo) videoPtsUs(info.presentationTimeUs) else audioPtsUs(info.presentationTimeUs)
+        if (publisher != null) {
+            val out = MediaCodec.BufferInfo().apply { set(0, info.size, ptsUs, info.flags) }
+            val copy = buffer.duplicate().apply { position(info.offset); limit(info.offset + info.size) }.slice()
+            publisher.sample(isVideo, copy, out)
+            return
+        }
         synchronized(muxerLock) {
             val current = muxer ?: return
             if (!muxerStarted || track < 0) {

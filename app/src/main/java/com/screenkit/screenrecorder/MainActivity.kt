@@ -37,6 +37,8 @@ import com.screenkit.screenrecorder.data.UpdateAndStatsManager
 import com.screenkit.screenrecorder.services.BlackScreenBypass
 import com.screenkit.screenrecorder.services.CameraCaptureService
 import com.screenkit.screenrecorder.services.FloatingOverlayService
+import com.screenkit.screenrecorder.streaming.LiveStreamConfig
+import com.screenkit.screenrecorder.streaming.LiveStreamSession
 import com.screenkit.screenrecorder.services.ScreenCaptureService
 import com.screenkit.screenrecorder.services.ScreenKitAutoService
 import com.screenkit.screenrecorder.services.ShakeAndKeyStopDetector
@@ -83,6 +85,7 @@ class MainActivity : ComponentActivity() {
                             screenSessionActive = active,
                             screenRecording = active && recording,
                             screenPaused = active && recording && paused,
+                            liveStreaming = active && mode == "live",
                             screenshotInProgress = active && mode == "screenshot",
                             screenRecordingStartedAt = if (active && recording) startedAt else 0L,
                         )
@@ -174,12 +177,14 @@ class MainActivity : ComponentActivity() {
             if (result.resultCode != Activity.RESULT_OK || data == null || mode == null) {
                 screenshotFlowPending = false
                 FloatingOverlayService.setHiddenForScreenshot(this, false)
+                LiveStreamSession.pending = null
                 showMessage("Screen capture was cancelled.")
                 return@registerForActivityResult
             }
             if (!CaptureIntents.startScreenCapture(this, mode, result.resultCode, data, crop)) {
                 screenshotFlowPending = false
                 FloatingOverlayService.setHiddenForScreenshot(this, false)
+                LiveStreamSession.pending = null
                 showMessage("Could not start the screen capture. Please try again.")
             }
         }
@@ -239,6 +244,14 @@ class MainActivity : ComponentActivity() {
                 onTakeScreenshot = { requestScreenCapture(CaptureContract.MODE_SCREENSHOT) },
                 onTakePartialScreenshot = { requestPartialScreenCapture(CaptureContract.MODE_PARTIAL_SCREENSHOT) },
                 onTakeLongScreenshot = { requestScreenCapture(CaptureContract.MODE_LONG_SCREENSHOT) },
+                onStartLive = { config ->
+                    if (!ScreenCaptureService.isActive && !CameraCaptureService.isRecording) {
+                        LiveStreamSession.pending = config
+                        requestScreenCapture(CaptureContract.MODE_LIVE_STREAM)
+                    } else showMessage("Finish the active capture before going live.")
+                },
+                onStopLive = { stopScreenRecording() },
+                onMuteLive = { startService(Intent(this, ScreenCaptureService::class.java).setAction(ScreenCaptureService.ACTION_MUTE_LIVE)) },
                 onToggleScreenRecording = { toggleScreenRecording() },
                 onPauseResumeScreenRecording = {
                     CaptureIntents.togglePauseScreenCapture(this)
@@ -593,6 +606,7 @@ class MainActivity : ComponentActivity() {
                 screenSessionActive = screenActive,
                 screenRecording = screenActive && screenRecording,
                 screenPaused = screenActive && screenRecording && screenPaused,
+                liveStreaming = screenActive && ScreenCaptureService.isLive,
                 screenshotInProgress = screenActive && screenMode == "screenshot",
                 screenRecordingStartedAt = if (screenRecording) ScreenCaptureService.recordingStartedAt else 0L,
                 cameraSessionActive = cameraActive,
@@ -681,14 +695,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun continueScreenCaptureAfterPermissions(mode: String) {
-        if (!CaptureIntents.canWriteExternalStorage(this)) {
+        if (mode != CaptureContract.MODE_LIVE_STREAM && !CaptureIntents.canWriteExternalStorage(this)) {
             pendingProjectionMode = null
             screenshotFlowPending = false
             FloatingOverlayService.setHiddenForScreenshot(this, false)
             showMessage("Storage permission is needed to save captures on this Android version.")
             return
         }
-        if ((mode == CaptureContract.MODE_SCREEN_RECORDING || mode == CaptureContract.MODE_PARTIAL_SCREEN_RECORDING) &&
+        if ((mode == CaptureContract.MODE_LIVE_STREAM || mode == CaptureContract.MODE_SCREEN_RECORDING || mode == CaptureContract.MODE_PARTIAL_SCREEN_RECORDING) &&
             SettingsStore.audioMode(this).requiresRecordPermission &&
             !hasPermission(Manifest.permission.RECORD_AUDIO)
         ) {
@@ -705,6 +719,7 @@ class MainActivity : ComponentActivity() {
             pendingProjectionMode = null
             screenshotFlowPending = false
             FloatingOverlayService.setHiddenForScreenshot(this, false)
+            LiveStreamSession.pending = null
             showMessage("Screen capture is not available on this device.")
             return
         }
@@ -713,6 +728,7 @@ class MainActivity : ComponentActivity() {
             pendingProjectionMode = null
             screenshotFlowPending = false
             FloatingOverlayService.setHiddenForScreenshot(this, false)
+            LiveStreamSession.pending = null
             showMessage("Could not open Android's screen-capture approval prompt.")
         }
     }
@@ -1057,6 +1073,8 @@ class MainActivity : ComponentActivity() {
                 continueScreenCaptureAfterPermissions(CaptureContract.MODE_PARTIAL_SCREENSHOT)
             flow == "screen:${CaptureContract.MODE_LONG_SCREENSHOT}" ->
                 continueScreenCaptureAfterPermissions(CaptureContract.MODE_LONG_SCREENSHOT)
+            flow == "screen:${CaptureContract.MODE_LIVE_STREAM}" ->
+                continueScreenCaptureAfterPermissions(CaptureContract.MODE_LIVE_STREAM)
             flow == "screen:${CaptureContract.MODE_SCREEN_RECORDING}" ->
                 continueScreenCaptureAfterPermissions(CaptureContract.MODE_SCREEN_RECORDING)
             flow == "screen:${CaptureContract.MODE_PARTIAL_SCREEN_RECORDING}" ->

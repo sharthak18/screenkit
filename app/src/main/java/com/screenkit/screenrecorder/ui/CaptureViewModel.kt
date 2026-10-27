@@ -37,6 +37,7 @@ internal data class CaptureUiState(
     val screenSessionActive: Boolean = false,
     val screenRecording: Boolean = false,
     val screenPaused: Boolean = false,
+    val liveStreaming: Boolean = false,
     val screenshotInProgress: Boolean = false,
     val screenRecordingStartedAt: Long = 0L,
     val cameraSessionActive: Boolean = false,

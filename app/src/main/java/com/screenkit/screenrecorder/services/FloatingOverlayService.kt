@@ -407,7 +407,7 @@ class FloatingOverlayService : Service() {
 
         if (recordingNow) {
             val mark = TextView(this).apply {
-                text = "■"
+                text = if (ScreenCaptureService.isLive) "LIVE" else "■"
                 textSize = 14f
                 typeface = Typeface.create("sans-serif", Typeface.BOLD)
                 setTextColor(Color.WHITE)
@@ -483,7 +483,9 @@ class FloatingOverlayService : Service() {
                     CaptureContract.COMMAND_TOGGLE_SCREEN_RECORDING,
                     screenRecording,
                 ),
-                if (screenRecording) {
+                if (ScreenCaptureService.isLive) {
+                    MenuAction("●", "Live info", CaptureContract.COMMAND_OPEN_APP, true)
+                } else if (screenRecording) {
                     MenuAction(
                         if (screenPaused) "▶" else "⏸",
                         if (screenPaused) "Resume" else "Pause",
@@ -499,7 +501,10 @@ class FloatingOverlayService : Service() {
                     CaptureContract.COMMAND_TOGGLE_CAMERA_RECORDING,
                     cameraRecording,
                 ),
-                MenuAction(soundIcon(), soundLabel(), CaptureContract.COMMAND_CYCLE_AUDIO, soundActive),
+                if (ScreenCaptureService.isLive) MenuAction(
+                    "♫", if (com.screenkit.screenrecorder.streaming.LiveStreamSession.status.value.muted) "Unmute" else "Mute",
+                    CaptureContract.COMMAND_CYCLE_AUDIO, !com.screenkit.screenrecorder.streaming.LiveStreamSession.status.value.muted,
+                ) else MenuAction(soundIcon(), soundLabel(), CaptureContract.COMMAND_CYCLE_AUDIO, soundActive),
                 MenuAction("⊕", "AutoTap", CaptureContract.COMMAND_OPEN_AUTO_CLICK, autoClickActive),
             ),
             listOf(
@@ -596,6 +601,10 @@ class FloatingOverlayService : Service() {
      * sheets execute directly inside the service so the current app stays uninterrupted.
      */
     private fun dispatch(command: String) {
+        if (ScreenCaptureService.isLive && (command == CaptureContract.COMMAND_CYCLE_AUDIO || command == CaptureContract.COMMAND_TOGGLE_AUDIO)) {
+            startService(Intent(this, ScreenCaptureService::class.java).setAction(ScreenCaptureService.ACTION_MUTE_LIVE))
+            return
+        }
         if (command == CaptureContract.COMMAND_CYCLE_AUDIO ||
             command == CaptureContract.COMMAND_TOGGLE_AUDIO
         ) {
@@ -708,12 +717,12 @@ class FloatingOverlayService : Service() {
             }
             CaptureContract.COMMAND_TOGGLE_SCREEN_RECORDING -> if (ScreenCaptureService.isRecording) {
                 CaptureIntents.stopScreenCapture(this)
-                CaptureIntents.toast(this, "Saving the screen recording…")
+                CaptureIntents.toast(this, if (ScreenCaptureService.isLive) "Ending live stream…" else "Saving the screen recording…")
                 return
             }
             CaptureContract.COMMAND_PARTIAL_SCREEN_RECORDING -> if (ScreenCaptureService.isRecording) {
                 CaptureIntents.stopScreenCapture(this)
-                CaptureIntents.toast(this, "Saving the screen recording…")
+                CaptureIntents.toast(this, if (ScreenCaptureService.isLive) "Ending live stream…" else "Saving the screen recording…")
                 return
             }
             CaptureContract.COMMAND_TOGGLE_CAMERA_RECORDING -> if (CameraCaptureService.isRecording) {

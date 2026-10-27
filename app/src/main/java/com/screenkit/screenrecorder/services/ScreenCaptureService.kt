@@ -33,6 +33,10 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.screenkit.screenrecorder.CaptureContract
 import com.screenkit.screenrecorder.MainActivity
+import com.screenkit.screenrecorder.streaming.LiveStreamConfig
+import com.screenkit.screenrecorder.streaming.LiveStreamSession
+import com.screenkit.screenrecorder.streaming.LiveStreamStatus
+import com.screenkit.screenrecorder.streaming.RtmpPublisher
 import com.screenkit.screenrecorder.R
 import com.screenkit.screenrecorder.data.CaptureAudioMode
 import com.screenkit.screenrecorder.data.CaptureKind
@@ -75,6 +79,8 @@ class ScreenCaptureService : Service() {
     private var recorder: MediaRecorder? = null
     private var recorderSurface: Surface? = null
     private var engine: ScreenRecorderEngine? = null
+    private var liveConfig: LiveStreamConfig? = null
+    private var publisher: RtmpPublisher? = null
     private var sink: CaptureSink? = null
     private var outputDescriptor: ParcelFileDescriptor? = null
     private var wakeLock: PowerManager.WakeLock? = null
@@ -110,7 +116,9 @@ class ScreenCaptureService : Service() {
             finishSession(
                 keepVideo = mode == Mode.VIDEO,
                 screenshot = null,
-                message = if (mode == Mode.VIDEO) {
+                message = if (isLive) {
+                    "Live stream ended because Android stopped screen sharing."
+                } else if (mode == Mode.VIDEO) {
                     "Android stopped screen sharing. Any valid recording was saved."
                 } else {
                     "Screen sharing ended before a screenshot frame arrived."
@@ -123,6 +131,8 @@ class ScreenCaptureService : Service() {
     companion object {
         const val ACTION_SCREENSHOT = "com.screenkit.screenrecorder.screen.SCREENSHOT"
         const val ACTION_LONG_SCREENSHOT = "com.screenkit.screenrecorder.screen.LONG_SCREENSHOT"
+        const val ACTION_START_LIVE = "com.screenkit.screenrecorder.screen.START_LIVE"
+        const val ACTION_MUTE_LIVE = "com.screenkit.screenrecorder.screen.MUTE_LIVE"
         const val ACTION_START_RECORDING = "com.screenkit.screenrecorder.screen.START_RECORDING"
         const val ACTION_PAUSE_RESUME = "com.screenkit.screenrecorder.screen.PAUSE_RESUME"
         const val ACTION_STOP = "com.screenkit.screenrecorder.screen.STOP"
@@ -136,6 +146,8 @@ class ScreenCaptureService : Service() {
         private const val SCREENSHOT_FALLBACK_MS = 850L
         private const val MAX_BLACK_FRAME_RETRIES = 8
 
+        @Volatile var isLive: Boolean = false
+            private set
         @Volatile var isActive: Boolean = false
             private set
         @Volatile var isRecording: Boolean = false
@@ -161,10 +173,20 @@ class ScreenCaptureService : Service() {
         when (intent.action) {
             ACTION_STOP -> {
                 if (sessionActive) {
-                    finishSession(true, null, "Recording saved.", stopProjection = true)
+                    finishSession(true, null, if (isLive) "Live stream ended." else "Recording saved.", stopProjection = true)
                 } else {
                     stopSelf(startId)
                 }
+                return START_NOT_STICKY
+            }
+            ACTION_MUTE_LIVE -> {
+                if (sessionActive && isLive && !finishing) {
+                    val muted = !(engine?.muted ?: false)
+                    engine?.muted = muted
+                    LiveStreamSession.update(LiveStreamSession.status.value.copy(muted = muted))
+                    updateNotification(recording = true)
+                    broadcastState()
+                } else if (!sessionActive) stopSelf(startId)
                 return START_NOT_STICKY
             }
             ACTION_PAUSE_RESUME -> {
@@ -180,6 +202,13 @@ class ScreenCaptureService : Service() {
             }
         }
         if (sessionActive) return START_NOT_STICKY
+        if (intent.action !in listOf(ACTION_SCREENSHOT, ACTION_LONG_SCREENSHOT, ACTION_START_RECORDING, ACTION_START_LIVE)) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
+        isLive = intent.action == ACTION_START_LIVE
+        liveConfig = if (isLive) LiveStreamSession.pending else null
+        LiveStreamSession.pending = null
 
         isLongScreenshotMode = intent.action == ACTION_LONG_SCREENSHOT
         longScreenshotFrames.clear()
@@ -201,7 +230,7 @@ class ScreenCaptureService : Service() {
 
         isActive = true
         isRecording = false
-        activeMode = if (mode == Mode.VIDEO) "screen" else "screenshot"
+        activeMode = if (isLive) "live" else if (mode == Mode.VIDEO) "screen" else "screenshot"
         recordingStartedAt = 0L
 
         if (mode == Mode.SCREENSHOT) {
@@ -224,6 +253,11 @@ class ScreenCaptureService : Service() {
         try {
             BlackScreenBypass.trySystemSecureBypass(this)
             promoteToForeground(mode == Mode.VIDEO && audioMode.requiresRecordPermission && canRecordAudio())
+            if (isLive) {
+                check(!CameraCaptureService.isRecording) { "Stop the camera recording first." }
+                checkNotNull(liveConfig) { "Enter the live destination again." }.validate()
+                LiveStreamSession.update(LiveStreamStatus(active = true, message = "Connecting…"))
+            }
             broadcastState()
             startApprovedCapture(intent)
         } catch (error: Exception) {
@@ -276,7 +310,7 @@ class ScreenCaptureService : Service() {
 
         val rawCropW = if (crop != null) crop.width().toInt().coerceIn(16, fullW) else fullW
         val rawCropH = if (crop != null) crop.height().toInt().coerceIn(16, fullH) else fullH
-        val size = videoSize(rawCropW, rawCropH)
+        val size = liveConfig?.dimensions(rawCropW, rawCropH) ?: videoSize(rawCropW, rawCropH)
         check(size.first >= 2 && size.second >= 2) { "Could not read the device screen dimensions." }
 
         val uvCropRect = if (crop != null) {
@@ -288,9 +322,10 @@ class ScreenCaptureService : Service() {
             )
         } else null
 
-        val output = CaptureSink.create(this, CaptureKind.SCREEN_RECORDING, ".mp4")
-            ?: throw IOException("Could not create the recording in the chosen location.")
-        sink = output
+        if (!isLive) {
+            sink = CaptureSink.create(this, CaptureKind.SCREEN_RECORDING, ".mp4")
+                ?: throw IOException("Could not create the recording in the chosen location.")
+        }
         acquireWakeLock()
 
         val recordAudioGranted = canRecordAudio()
@@ -303,7 +338,32 @@ class ScreenCaptureService : Service() {
             else -> audioMode
         }
 
-        if (effective != CaptureAudioMode.NONE) {
+        if (isLive) {
+            val config = checkNotNull(liveConfig)
+            val transport = RtmpPublisher(
+                onConnected = {
+                    if (sessionActive && !finishing) {
+                        engine?.requestKeyFrame()
+                        recordingStartedAt = System.currentTimeMillis()
+                        LiveStreamSession.update(LiveStreamSession.status.value.copy(
+                            connected = true, message = "LIVE · Sending to server", startedAt = recordingStartedAt,
+                        ))
+                        broadcastState()
+                        updateNotification(recording = true)
+                    }
+                },
+                onFailure = { message ->
+                    if (sessionActive && !finishing) finishSession(false, null, message, stopProjection = true)
+                },
+                onBitrate = { bitrate ->
+                    if (sessionActive && !finishing) LiveStreamSession.update(LiveStreamSession.status.value.copy(bitrate = bitrate))
+                },
+            )
+            publisher = transport
+            startEngineRecording(metrics, size, effective, uvCropRect)
+            transport.connect(config, size.first, size.second, hasAudio = true)
+            liveConfig = null // Only the transport retains its endpoint until disconnect.
+        } else if (effective != CaptureAudioMode.NONE) {
             startEngineRecording(metrics, size, effective, uvCropRect)
         } else {
             startMediaRecorderRecording(metrics, size, effective, uvCropRect)
@@ -322,6 +382,7 @@ class ScreenCaptureService : Service() {
     }
 
     private fun togglePauseResume() {
+        if (isLive) return // Live timestamps cannot be paused; mute audio or end the broadcast instead.
         val screenEngine = engine
         val mediaRecorder = recorder
         if (!isPaused) {
@@ -399,23 +460,30 @@ class ScreenCaptureService : Service() {
         effective: CaptureAudioMode,
         uvCropRect: android.graphics.RectF?,
     ) {
-        val target = sink ?: throw IOException("Could not create the recording in the chosen location.")
-        val descriptor = target.openDescriptorForWrite(this)
+        val target = sink
+        val descriptor = target?.openDescriptorForWrite(this)
         if (descriptor != null) outputDescriptor = descriptor
-        val file = if (descriptor == null) target.tempTarget?.also { it.parentFile?.mkdirs() } else null
-        if (descriptor == null && file == null) throw IOException("Could not open the recording file.")
+        val file = if (descriptor == null) target?.tempTarget?.also { it.parentFile?.mkdirs() } else null
+        if (!isLive && descriptor == null && file == null) throw IOException("Could not open the recording file.")
 
         val screenEngine = ScreenRecorderEngine(
             width = size.first,
             height = size.second,
-            frameRate = FRAME_RATE,
-            bitRate = bitrateFor(size.first, size.second),
+            frameRate = liveConfig?.fps ?: FRAME_RATE,
+            bitRate = liveConfig?.let { it.bitrateKbps * 1000 } ?: bitrateFor(size.first, size.second),
             audioMode = effective,
             projection = projection ?: error("Android did not provide a screen capture session."),
             descriptor = descriptor,
             file = file,
-            onAudioUnavailable = { note -> audioNote = note },
+            onAudioUnavailable = { note ->
+                audioNote = note
+                if (isLive) mainHandler.post {
+                    if (sessionActive && !finishing) android.widget.Toast.makeText(this, note, android.widget.Toast.LENGTH_LONG).show()
+                }
+            },
+            publisher = publisher,
         )
+        engine = screenEngine
         screenEngine.prepare()
         setupVirtualDisplayWithCrop(metrics, size, screenEngine.surface, uvCropRect)
         screenEngine.start()
@@ -883,7 +951,18 @@ class ScreenCaptureService : Service() {
         var resultUri: Uri? = null
         var finalMessage = message
 
-        if (mode == Mode.VIDEO) {
+        val wasLive = isLive
+        if (wasLive) {
+            publisher?.close()
+            publisher = null
+            liveConfig = null
+            LiveStreamSession.pending = null
+            virtualDisplay?.let { runCatching { it.release() } }
+            virtualDisplay = null
+            engine?.abort()
+            engine = null
+            LiveStreamSession.update(LiveStreamStatus(message = finalMessage))
+        } else if (mode == Mode.VIDEO) {
             var finalized = false
             val screenEngine = engine
             if (screenEngine != null) {
@@ -937,6 +1016,7 @@ class ScreenCaptureService : Service() {
         releaseWakeLock()
         sessionActive = false
         isActive = false
+        isLive = false
         isRecording = false
         isPaused = false
         activeMode = ""
@@ -1040,9 +1120,10 @@ class ScreenCaptureService : Service() {
         )
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_capture)
-            .setContentTitle(if (recording) "Screen recording" else "Screen capture")
+            .setContentTitle(if (isLive) "ScreenKit Live" else if (recording) "Screen recording" else "Screen capture")
             .setContentText(
-                if (recording) "${elapsedText()} · Tap Stop to save the MP4." else "Saving a screenshot…",
+                if (isLive) "${LiveStreamSession.status.value.message} · ${elapsedText()}"
+                else if (recording) "${elapsedText()} · Tap Stop to save the MP4." else "Saving a screenshot…",
             )
             .setContentIntent(contentIntent)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
@@ -1050,16 +1131,17 @@ class ScreenCaptureService : Service() {
             .setOnlyAlertOnce(true)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
 
-        if (recording) {
+        if (recording || isLive) {
             val pauseResume = PendingIntent.getService(
                 this,
                 403,
-                Intent(this, ScreenCaptureService::class.java).setAction(ACTION_PAUSE_RESUME),
+                Intent(this, ScreenCaptureService::class.java).setAction(if (isLive) ACTION_MUTE_LIVE else ACTION_PAUSE_RESUME),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
             builder.addAction(
                 if (isPaused) android.R.drawable.ic_media_play else android.R.drawable.ic_media_pause,
-                if (isPaused) "Resume" else "Pause",
+                if (isLive) { if (LiveStreamSession.status.value.muted) "Unmute" else "Mute audio" }
+                else if (isPaused) "Resume" else "Pause",
                 pauseResume,
             )
             val stop = PendingIntent.getService(
@@ -1074,7 +1156,7 @@ class ScreenCaptureService : Service() {
     }
 
     private fun elapsedText(): String {
-        val elapsedSeconds = ((System.currentTimeMillis() - recordingStartedAt).coerceAtLeast(0L) / 1_000L)
+        val elapsedSeconds = if (recordingStartedAt == 0L) 0L else ((System.currentTimeMillis() - recordingStartedAt).coerceAtLeast(0L) / 1_000L)
         return String.format(Locale.getDefault(), "%02d:%02d", elapsedSeconds / 60, elapsedSeconds % 60)
     }
 
@@ -1119,7 +1201,9 @@ class ScreenCaptureService : Service() {
         sendBroadcast(update)
     }
 
-    private fun describeStartupError(error: Exception): String = when (error) {
+    private fun describeStartupError(error: Exception): String = if (isLive) {
+        "Live streaming could not start. Re-enter the destination, accept screen sharing, or try a lower quality."
+    } else when (error) {
         is SecurityException -> "Screen capture was not approved. Accept Android's prompt and try again."
         is IOException -> "Could not create the capture file. Check available storage and try again."
         else -> "Screen capture could not start on this device. Please try again."

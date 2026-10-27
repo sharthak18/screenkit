@@ -116,6 +116,9 @@ internal fun MainScreen(
     onTakeScreenshot: () -> Unit,
     onTakePartialScreenshot: () -> Unit,
     onTakeLongScreenshot: () -> Unit = {},
+    onStartLive: (com.screenkit.screenrecorder.streaming.LiveStreamConfig) -> Unit = {},
+    onStopLive: () -> Unit = {},
+    onMuteLive: () -> Unit = {},
     onToggleScreenRecording: () -> Unit,
     onPauseResumeScreenRecording: () -> Unit = {},
     onTogglePartialScreenRecording: () -> Unit,
@@ -186,6 +189,12 @@ internal fun MainScreen(
                     onTogglePartialScreenRecording = onTogglePartialScreenRecording,
                     onToggleCameraRecording = onToggleCameraRecording,
                     onProjectionScopeSelected = onProjectionScopeSelected,
+                )
+                LiveStreamCard(
+                    busy = state.screenSessionActive || state.cameraRecording,
+                    audioMode = state.audioMode,
+                    onAudioMode = onAudioModeSelected,
+                    onStart = onStartLive, onStop = onStopLive, onMute = onMuteLive,
                 )
                 AutoClickScrollCard(
                     state = state,
@@ -464,6 +473,7 @@ private fun CaptureActions(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     ActionButton(
                         label = when {
+                            state.liveStreaming -> "End live stream"
                             state.screenRecording -> "Stop & save"
                             state.screenSessionActive -> "Busy…"
                             else -> "Record whole screen"
@@ -474,7 +484,7 @@ private fun CaptureActions(
                         onClick = onToggleScreenRecording,
                         modifier = Modifier.weight(1f),
                     )
-                    if (state.screenRecording) {
+                    if (state.screenRecording && !state.liveStreaming) {
                         OutlinedButton(
                             onClick = onPauseResumeScreenRecording,
                             shape = RoundedCornerShape(14.dp),
