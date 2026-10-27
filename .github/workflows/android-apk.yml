@@ -6,6 +6,12 @@ on:
     branches:
       - "main"
       - "arena/**"
+    paths:
+      - "app/**"
+      - "third_party/**"
+      - "*.gradle.kts"
+      - "gradle.properties"
+      - ".github/workflows/android-apk.yml"
     tags:
       - "v*"
 

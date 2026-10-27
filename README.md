@@ -4,6 +4,14 @@ A native, high-performance Android capture, creator studio & screen automation s
 
 ---
 
+## iPhone and iPad
+
+A native **iOS 17+** companion now lives in [`ios/`](ios/README.md): SwiftUI recording,
+local video tools, and a ReplayKit RTMP/RTMPS broadcast extension. It requires Xcode
+and Apple signing; it is not an APK conversion or an unsigned iPhone download.
+See the [iOS setup guide](ios/README.md) and [device-test checklist](ios/TESTING.md).
+Android-only automation/overlay and protected-capture features are not ported.
+
 ## Download and Install
 
 [⬇️ **Download the latest ScreenKit v2.1.0 APK**](https://github.com/sharthak18/ScreenKit/releases/latest/download/ScreenKit.apk)

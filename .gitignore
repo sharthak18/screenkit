@@ -11,3 +11,15 @@ captures/
 # OS/editor noise
 .DS_Store
 Thumbs.db
+
+# Native iOS generated outputs / signing material
+ios/ScreenKit.xcodeproj/
+**/.build/
+**/DerivedData/
+**/*.xcuserstate
+**/xcuserdata/
+*.ipa
+*.p12
+*.mobileprovision
+# Synthetic TLS regression fixture, not a signing identity
+!third_party/rootencoder/common/src/test/resources/localhost-test-only.p12
