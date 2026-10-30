@@ -1,5 +1,5 @@
 <resources>
     <string name="app_name">ScreenKit</string>
     <string name="auto_service_label">ScreenKit Auto Click &amp; Scroll</string>
-    <string name="auto_service_description">Allows ScreenKit to perform user-configured sequential auto-clicking (1 → 2 → 3 → 4…) and auto-scrolling (up, down, left, right) gestures on screen.</string>
+    <string name="auto_service_description">Run gestures you start. Optional Smart Scroll reads visible playback and ad controls on-device to wait for videos and ad breaks. Screen content is not stored or transmitted. Enable only if you trust ScreenKit.</string>
 </resources>

@@ -1,4 +1,4 @@
-# ScreenKit (v2.1.0)
+# ScreenKit (v2.1.1)
 
 A native, high-performance Android capture, creator studio & screen automation suite built with Modern Android Architecture (Jetpack Compose, CameraX, Foreground Services, Accessibility Gesture Engine, MediaProjection, OpenGL ES, MediaMuxer/MediaExtractor, and MediaCodec). ScreenKit v2.1.0 adds **Go Live screen streaming to YouTube, Facebook, and custom RTMP/RTMPS destinations** alongside screen recording with **Pause & Resume**, custom area cropping, **Scrolling Long Screenshots ("Stitch Full Page")**, built-in **MP4 Video Trimmer, Animated GIF Maker & PNG Frame Extractor**, sequential multi-target **Auto Clicking (`1 → 2 → 3 → 4…`)**, directional **Auto Scrolling (`↑ / ↓ / ← / →`)**, **Touch Macro Recorder & Replay**, **Saved Auto-Clicker Profiles (Slots 1–3)**, **Anti-Detection Human Jitter**, **Smart Color / Pixel Trigger (`#HEX`)**, **Floating Teleprompter**, **On-Screen Magnifier Loupe & Color Eyedropper**, **Creator Watermark Badge**, **Shake / Volume-Down Emergency Stop**, **Live Usage Analytics & One-Tap In-App Updater**, live interactive brush annotation, on-screen touch visualization, a draggable floating camera lens, amplified sound recording (Mic / Device Audio / Mixed), and a built-in Black-Screen Bypass Web Capture Browser.
 
@@ -14,15 +14,50 @@ Android-only automation/overlay and protected-capture features are not ported.
 
 ## Download and Install
 
-[⬇️ **Download the latest ScreenKit v2.1.0 APK**](https://github.com/sharthak18/ScreenKit/releases/latest/download/ScreenKit.apk)
+[⬇️ **Download the latest ScreenKit v2.1.1 APK**](https://github.com/sharthak18/ScreenKit/releases/latest/download/ScreenKit.apk)
 
-- **Current Version**: `v2.1.0` (`versionCode = 8`)
+- **Current Version**: `v2.1.1` (`versionCode = 9`)
 - Compatible with **Android 7.0 (API 24) to Android 15 (API 35)**.
 - Device Audio & Mixed (`Mic + Device`) playback capture supported on **Android 10+**.
 - Full screen scope and single-app exclusion selection supported on **Android 14+**.
 - On Android, open the downloaded APK and follow the system prompt. Allow "Install unknown apps" for your browser or file manager if prompted.
 
 ---
+
+## Fixed in v2.1.1
+
+- **Floating Long Screenshot:** open the bubble and tap **Long SS** on its third row.
+  Enable the ScreenKit Accessibility service first. Capture hides overlays, stops automatic
+  scrolling, and samples up to three settled screens (or stops when the page does not change).
+  Long-image stitching is approximate on sticky/dynamic layouts, not guaranteed seamless.
+- **Real Zoom feed:** Zoom now asks for Android whole-screen sharing and reads fresh screen
+  pixels up to 5 times/second. Drag the panel; the sample target is 20dp below it (outside
+  the magnifier itself). The 3× loupe and color sample use this live feed, not a saved image
+  or generated colors. The feed is scaled to a 1600px long edge for memory use; sampled
+  colors are from that scaled feed. Close Zoom or its notification to release capture.
+  No pixels are saved or sent anywhere. Rotate/reopen Zoom to realign coordinates.
+  Zoom is exclusive with recording, broadcasting, and screenshots. Protected screens may
+  remain black. Color-trigger clicks now wait rather than fire when live pixels are unavailable.
+- **Custom scroll delay:** **Custom seconds / Smart playback** is available in the app and
+  floating Auto Scroll settings. Enter **0.2–3600 seconds** (including decimals), e.g.
+  30, 90, 300 or 900. The first item receives the same viewing delay. Session duration is
+  separate: choose **Infinite** if you want a delay longer than the total run time.
+- **Smart playback (experimental, opt-in):** while Auto Scroll runs, reads visible
+  accessibility controls in YouTube, Instagram, Facebook/Facebook Lite. Explicit
+  sponsored-feed labels can advance the feed; visible **Skip ad** buttons can be used;
+  recognised in-video ad/countdown labels hold scrolling until the ad finishes. Exposed
+  playback progress can advance on video end/loop instead of repeating a short video.
+  The timer restarts after an ad when playback information is unavailable. **Hold/Resume**
+  and **Next** are always available on the running scroll bar.
+- **Limits:** no bypass of unskippable ads; no guarantee of detecting every app version,
+  language, ad format, or hidden player timeline. When progress is unavailable, the banner
+  explicitly says **timed fallback**. Unsupported apps do not auto-swipe in Smart mode;
+  use Timed mode there. Manual Hold/Next handles cases the app cannot observe.
+- **Privacy:** the Accessibility service now declares window-content retrieval for Smart
+  mode. Inspection is opt-in, limited to visible controls while automation runs, and bounded
+  to a small node/time budget. No text is logged, persisted or sent. After updating, re-enable
+  ScreenKit in Android Accessibility if the new capability is not active.
+- Fixed a separate service-action dispatch bug that rejected the Go Live start action.
 
 ## What's New in v2.1.0
 

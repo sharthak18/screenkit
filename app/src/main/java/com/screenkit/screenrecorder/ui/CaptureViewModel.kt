@@ -58,6 +58,7 @@ internal data class CaptureUiState(
     val autoScrollDirection: AutoScrollDirection = AutoScrollDirection.DOWN,
     val autoScrollSpeedMs: Long = 450L,
     val autoScrollIntervalMs: Long = 1500L,
+    val autoScrollSmartEnabled: Boolean = false,
     val autoScrollDurationSec: Int = 120,
     val autoScrollDistancePct: Int = 55,
     val autoRandomJitter: Boolean = true,

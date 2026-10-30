@@ -368,7 +368,7 @@ class FloatingOverlayService : Service() {
                 menu,
                 LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
-                    dp(CELL_HEIGHT_DP * 2 + if (ScreenCaptureService.isLive) 24 else 0),
+                    dp(CELL_HEIGHT_DP * 3 + if (ScreenCaptureService.isLive) 24 else 0),
                 ),
             )
             root.addView(
@@ -384,7 +384,7 @@ class FloatingOverlayService : Service() {
                     menu,
                     LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.WRAP_CONTENT,
-                        dp(CELL_HEIGHT_DP * 2 + if (ScreenCaptureService.isLive) 24 else 0),
+                        dp(CELL_HEIGHT_DP * 3 + if (ScreenCaptureService.isLive) 24 else 0),
                     ).apply { leftMargin = dp(4) },
                 )
             }
@@ -551,6 +551,10 @@ class FloatingOverlayService : Service() {
                 ),
                 MenuAction("🌐", "Bypass", CaptureContract.COMMAND_OPEN_WEB_BYPASS, false),
                 MenuAction("⊞", "Home", CaptureContract.COMMAND_OPEN_APP, false),
+            ),
+            listOf(
+                MenuAction("⇣", "Long SS", CaptureContract.COMMAND_LONG_SCREENSHOT, false),
+                MenuAction("©", "Badge", CaptureContract.COMMAND_TOGGLE_WATERMARK, CreatorToolsOverlay.isWatermarkShowing),
             ),
         )
         rows.forEach { actions ->

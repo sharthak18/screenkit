@@ -195,7 +195,7 @@ class ScreenCaptureService : Service() {
                 }
                 return START_NOT_STICKY
             }
-            ACTION_SCREENSHOT, ACTION_LONG_SCREENSHOT, ACTION_START_RECORDING -> Unit
+            ACTION_SCREENSHOT, ACTION_LONG_SCREENSHOT, ACTION_START_RECORDING, ACTION_START_LIVE -> Unit
             else -> {
                 stopSelf(startId)
                 return START_NOT_STICKY
@@ -576,8 +576,9 @@ class ScreenCaptureService : Service() {
 
     private fun startScreenshotCapture() {
         val metrics = realDisplayMetrics()
-        val width = metrics.widthPixels
-        val height = metrics.heightPixels
+        val scale = if (isLongScreenshotMode) minOf(1.0, 1920.0 / maxOf(metrics.widthPixels, metrics.heightPixels)) else 1.0
+        val width = (metrics.widthPixels * scale).toInt()
+        val height = (metrics.heightPixels * scale).toInt()
         require(width > 0 && height > 0) { "Could not read the device screen dimensions." }
 
         // Ensure all floating overlays are hidden before capturing any display frames
@@ -611,7 +612,7 @@ class ScreenCaptureService : Service() {
         // Fallback if the screen is completely still after the settle delay
         mainHandler.postDelayed({
             if (sessionActive && mode == Mode.SCREENSHOT && !finishing && !screenshotClaimed.get()) {
-                captureStashedScreenshot()
+                if (isLongScreenshotMode) captureNextLongFrame() else captureStashedScreenshot()
             }
         }, SCREENSHOT_SETTLE_MS + SCREENSHOT_FALLBACK_MS)
         mainHandler.postDelayed({
@@ -632,6 +633,10 @@ class ScreenCaptureService : Service() {
         try {
             image = reader.acquireLatestImage() ?: return
             if (!sessionActive || finishing || screenshotClaimed.get()) return
+            if (isLongScreenshotMode) {
+                stashPendingFrame(image)
+                return // Long capture uses scheduled settled frames, not a single-shot fallback.
+            }
             if (skippedInitialFrames++ == 0) return
 
             val now = SystemClock.elapsedRealtime()
@@ -665,42 +670,11 @@ class ScreenCaptureService : Service() {
                 return
             }
 
-            // Multi-frame vertical stitch for Scrolling Long Screenshot mode!
-            if (isLongScreenshotMode && ScreenKitAutoService.instance != null && longScreenshotFrames.size < 3) {
-                if (longScreenshotScrollInFlight || now < longScreenshotNextCaptureElapsed) {
-                    cropped.recycle()
-                    return
-                }
-                longScreenshotFrames.add(cropped)
-                if (longScreenshotFrames.size < 3) {
-                    longScreenshotScrollInFlight = true
-                    val w = cropped.width.toFloat()
-                    val h = cropped.height.toFloat()
-                    mainHandler.post {
-                        val svc = ScreenKitAutoService.instance
-                        if (svc != null && sessionActive && !finishing) {
-                            svc.performSwipe(w * 0.5f, h * 0.72f, w * 0.5f, h * 0.28f, 380L) {
-                                longScreenshotNextCaptureElapsed = SystemClock.elapsedRealtime() + 450L
-                                longScreenshotScrollInFlight = false
-                            }
-                        } else {
-                            longScreenshotScrollInFlight = false
-                        }
-                    }
-                    return
-                }
-            }
-
             if (!screenshotClaimed.compareAndSet(false, true)) {
                 cropped.recycle()
                 return
             }
-
-            var finalBitmap = if (isLongScreenshotMode && longScreenshotFrames.size >= 2) {
-                stitchVerticalBitmaps(longScreenshotFrames)
-            } else {
-                cropped
-            }
+            var finalBitmap = cropped
             var finalBlank = isBlack
             if (finalBlank) {
                 // Attempt hardware/shell screencap fallback if MediaProjection returned a black frame
@@ -712,7 +686,6 @@ class ScreenCaptureService : Service() {
                 }
             }
 
-            CreatorToolsOverlay.updateSampleBitmap(finalBitmap)
             bitmap = finalBitmap
             val saved = saveScreenshot(finalBitmap)
             mainHandler.post {
@@ -723,7 +696,7 @@ class ScreenCaptureService : Service() {
                         keepVideo = false,
                         screenshot = saved,
                         message = if (finalBlank) {
-                            "Screenshot is blank due to app/site DRM. Tap 'Bypass' on the floating bubble to capture restricted websites."
+                            "Screenshot is blank. The app may protect this screen; ScreenKit cannot bypass protected content."
                         } else {
                             "Screenshot saved to ${SettingsStore.describeSaveLocation(this@ScreenCaptureService)}."
                         },
@@ -767,6 +740,55 @@ class ScreenCaptureService : Service() {
             }
             existing?.takeUnless { it.isRecycled }?.recycle()
             pendingBitmap = decoded
+        }
+    }
+
+    private fun captureNextLongFrame() {
+        if (!sessionActive || finishing || screenshotClaimed.get()) return
+        imageHandler?.post {
+            if (!sessionActive || finishing || screenshotClaimed.get()) return@post
+            val frame = synchronized(pendingLock) { pendingBitmap?.takeUnless { it.isRecycled }?.copy(Bitmap.Config.ARGB_8888, false) }
+            if (frame == null) {
+                mainHandler.postDelayed({ captureNextLongFrame() }, 350L)
+                return@post
+            }
+            try {
+                val done = synchronized(longScreenshotFrames) {
+                    if (finishing) { frame.recycle(); return@post }
+                    val duplicate = longScreenshotFrames.lastOrNull()?.sameAs(frame) == true
+                    if (duplicate) frame.recycle() else longScreenshotFrames.add(frame)
+                    duplicate || longScreenshotFrames.size >= 3
+                }
+                if (done) {
+                    if (!screenshotClaimed.compareAndSet(false, true)) return@post
+                    val combined = synchronized(longScreenshotFrames) {
+                        stitchVerticalBitmaps(longScreenshotFrames).also { longScreenshotFrames.clear() }
+                    }
+                    val saved = try { saveScreenshot(combined) } finally { if (!combined.isRecycled) combined.recycle() }
+                    mainHandler.post {
+                        if (!finishing) finishSession(false, saved,
+                            if (saved != null) "Long Screenshot saved. Stitching may vary with sticky headers and moving content."
+                            else "Long Screenshot could not be saved.", true)
+                    }
+                } else {
+                    mainHandler.post {
+                        if (!sessionActive || finishing) return@post
+                        val service = ScreenKitAutoService.instance
+                        if (service == null) {
+                            finishSession(false, null, "Long Screenshot stopped: accessibility was disconnected.", true)
+                        } else {
+                            val metrics = realDisplayMetrics()
+                            service.performSwipe(metrics.widthPixels * 0.5f, metrics.heightPixels * 0.72f,
+                                metrics.widthPixels * 0.5f, metrics.heightPixels * 0.28f, 600L) { success ->
+                                if (success) mainHandler.postDelayed({ captureNextLongFrame() }, 700L)
+                                else if (!finishing) finishSession(false, null, "Long Screenshot stopped: the scroll gesture was interrupted.", true)
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                mainHandler.post { if (!finishing) finishSession(false, null, "Long Screenshot could not finish. Try a static page.", true) }
+            }
         }
     }
 
@@ -816,7 +838,7 @@ class ScreenCaptureService : Service() {
                         screenshot = saved,
                         message = when {
                             saved == null -> "The screenshot could not be saved. Check free storage and try again."
-                            blank -> "Screenshot is blank due to app/site DRM. Tap 'Bypass' on the floating bubble to capture restricted websites."
+                            blank -> "Screenshot is blank. The app may protect this screen; ScreenKit cannot bypass protected content."
                             else -> "Screenshot saved to ${SettingsStore.describeSaveLocation(this)}."
                         },
                         stopProjection = true,
@@ -831,8 +853,8 @@ class ScreenCaptureService : Service() {
         if (frames.size == 1) return frames.first()
         val width = frames.first().width
         val singleH = frames.first().height
-        // Trim top 12% (status/app bar) and bottom 12% (nav bar) on subsequent frames so content stitches seamlessly
-        val cropTop = (singleH * 0.12f).toInt()
+        // Approximate the 44%-height swipe; arbitrary sticky/dynamic layouts cannot be perfectly stitched.
+        val cropTop = (singleH * 0.44f).toInt()
         val cropBottom = (singleH * 0.88f).toInt()
         val middleSliceH = (cropBottom - cropTop).coerceAtLeast(100)
         val totalHeight = singleH + (frames.size - 1) * middleSliceH
@@ -852,7 +874,6 @@ class ScreenCaptureService : Service() {
             }
             bmp.recycle()
         }
-        frames.toMutableList().clear()
         return result
     }
 
@@ -1013,6 +1034,10 @@ class ScreenCaptureService : Service() {
             pendingBitmap = null
         }
         releaseCaptureResources(stopProjection)
+        synchronized(longScreenshotFrames) {
+            longScreenshotFrames.forEach { if (!it.isRecycled) it.recycle() }
+            longScreenshotFrames.clear()
+        }
         releaseWakeLock()
         sessionActive = false
         isActive = false

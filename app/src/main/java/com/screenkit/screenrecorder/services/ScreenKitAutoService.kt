@@ -31,7 +31,13 @@ class ScreenKitAutoService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // ScreenKit does not read window content; it only dispatches user-started gestures.
+        // No event text is stored. Visible controls are queried only by opt-in smart scrolling.
+    }
+
+    internal fun observePlayback(clickSkip: Boolean = false): com.screenkit.screenrecorder.automation.PlaybackObservation {
+        if (!AutoClickScrollOverlay.isExecuting || !SettingsStore.autoScrollSmartEnabled(this))
+            return com.screenkit.screenrecorder.automation.PlaybackObservation()
+        return com.screenkit.screenrecorder.automation.PlaybackInspector.inspect(rootInActiveWindow, clickSkip)
     }
 
     override fun onInterrupt() {

@@ -24,11 +24,11 @@ internal object CaptureIntents {
      * Android 14+ shows a "share one app" option that freezes the recording as soon as the user
      * switches away. The default scope therefore asks for the whole display only.
      */
-    fun projectionConsentIntent(context: Context): Intent? {
+    fun projectionConsentIntent(context: Context, wholeDisplay: Boolean = false): Intent? {
         val manager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
             ?: return null
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
-            SettingsStore.projectionScope(context) == ProjectionScope.ENTIRE_SCREEN
+            (wholeDisplay || SettingsStore.projectionScope(context) == ProjectionScope.ENTIRE_SCREEN)
         ) {
             manager.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())
         } else {
@@ -43,6 +43,21 @@ internal object CaptureIntents {
         data: Intent,
         cropRect: android.graphics.RectF? = null,
     ): Boolean {
+        if (mode == CaptureContract.MODE_MAGNIFIER) {
+            return startForeground(context, Intent(context, com.screenkit.screenrecorder.services.MagnifierCaptureService::class.java)
+                .putExtra(CaptureContract.EXTRA_RESULT_CODE, resultCode).putExtra(CaptureContract.EXTRA_RESULT_DATA, data))
+        }
+        if (com.screenkit.screenrecorder.services.MagnifierCaptureService.active) {
+            toast(context, "Close Zoom before starting another screen capture.")
+            return false
+        }
+        if (mode == CaptureContract.MODE_LONG_SCREENSHOT) {
+            if (com.screenkit.screenrecorder.services.ScreenKitAutoService.instance == null) {
+                toast(context, "Long Screenshot needs ScreenKit Auto Click & Scroll enabled in Accessibility.")
+                return false
+            }
+            com.screenkit.screenrecorder.ui.AutoClickScrollOverlay.stopExecution()
+        }
         val audio = SettingsStore.audioMode(context)
         val intent = Intent(context, ScreenCaptureService::class.java)
             .setAction(
@@ -71,6 +86,10 @@ internal object CaptureIntents {
     }
 
     fun startCameraRecording(context: Context): Boolean {
+        if (com.screenkit.screenrecorder.services.MagnifierCaptureService.active) {
+            toast(context, "Close Zoom before starting a camera recording.")
+            return false
+        }
         val audio = SettingsStore.audioMode(context)
         val audioCapable = audio.usesMicrophone && hasPermission(context, Manifest.permission.RECORD_AUDIO)
         val intent = Intent(context, CameraCaptureService::class.java)
@@ -163,7 +182,7 @@ internal object CaptureIntents {
         ) {
             required += Manifest.permission.POST_NOTIFICATIONS
         }
-        if (mode != CaptureContract.MODE_LIVE_STREAM && Build.VERSION.SDK_INT <= Build.VERSION_CODES.P && !canWriteExternalStorage(context)) {
+        if (mode != CaptureContract.MODE_MAGNIFIER && mode != CaptureContract.MODE_LIVE_STREAM && Build.VERSION.SDK_INT <= Build.VERSION_CODES.P && !canWriteExternalStorage(context)) {
             required += Manifest.permission.WRITE_EXTERNAL_STORAGE
         }
         when (mode) {

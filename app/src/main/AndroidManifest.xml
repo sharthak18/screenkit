@@ -62,6 +62,11 @@
             android:theme="@style/Theme.ScreenKit.Transparent" />
 
         <service
+            android:name=".services.MagnifierCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <service
             android:name=".services.ScreenCaptureService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection|microphone" />

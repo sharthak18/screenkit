@@ -560,6 +560,7 @@ class MainActivity : ComponentActivity() {
                 autoScrollIntervalMs = SettingsStore.autoScrollIntervalMs(this),
                 autoScrollDurationSec = SettingsStore.autoScrollDurationSec(this),
                 autoScrollDistancePct = SettingsStore.autoScrollDistancePct(this),
+                autoScrollSmartEnabled = SettingsStore.autoScrollSmartEnabled(this),
                 autoRandomJitter = SettingsStore.autoRandomJitter(this),
                 autoColorTriggerEnabled = SettingsStore.autoColorTriggerEnabled(this),
                 autoColorTriggerHex = SettingsStore.autoColorTriggerHex(this),
@@ -665,6 +666,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestScreenCapture(mode: String) {
+        if (com.screenkit.screenrecorder.services.MagnifierCaptureService.active) {
+            showMessage("Close Zoom before starting another screen capture.")
+            return
+        }
         val state = viewModel.state.value
         if (state.screenRecording) {
             if (mode == CaptureContract.MODE_SCREENSHOT || mode == CaptureContract.MODE_PARTIAL_SCREENSHOT) {

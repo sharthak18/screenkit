@@ -58,7 +58,20 @@ internal object CreatorToolsOverlay {
     private var magnifierInfoTv: TextView? = null
     private var currentSampleX = 540
     private var currentSampleY = 960
-    private var currentSampleColor: Int = Color.parseColor("#4CAF50")
+    private var currentSampleColor: Int = Color.TRANSPARENT
+    private var sampleScreenWidth = 1
+    private var sampleScreenHeight = 1
+    private var sampledAt = 0L
+    private var feedContext: Context? = null
+    private fun freshPixels(): Boolean = latestScreenBitmap?.isRecycled == false &&
+        android.os.SystemClock.elapsedRealtime() - sampledAt < 2000L
+    private val magnifierTicker = object : Runnable {
+        override fun run() {
+            if (!isMagnifierShowing) return
+            samplePixelAtReticle()
+            mainHandler.postDelayed(this, 500L)
+        }
+    }
     @Volatile
     var latestScreenBitmap: Bitmap? = null
         private set
@@ -87,35 +100,26 @@ internal object CreatorToolsOverlay {
         }
     }
 
-    /** Called by ScreenCaptureService whenever a frame is captured so the Magnifier/Eyedropper has fresh pixels. */
-    fun updateSampleBitmap(bitmap: Bitmap?) {
-        if (bitmap == null || bitmap.isRecycled) return
-        runCatching {
-            val copy = bitmap.copy(Bitmap.Config.ARGB_8888, false)
-            latestScreenBitmap = copy
-            mainHandler.post {
-                if (isMagnifierShowing) {
-                    samplePixelAtReticle()
-                }
-            }
-        }
+    /** Main-thread ownership transfer: at most one live bitmap is retained, never screenshot history. */
+    fun updateLiveFrame(bitmap: Bitmap, screenWidth: Int, screenHeight: Int) {
+        val previous = latestScreenBitmap
+        latestScreenBitmap = bitmap
+        sampleScreenWidth = screenWidth; sampleScreenHeight = screenHeight
+        sampledAt = android.os.SystemClock.elapsedRealtime()
+        previous?.takeUnless { it === bitmap || it.isRecycled }?.recycle()
+        if (isMagnifierShowing) samplePixelAtReticle()
     }
 
-    /**
-     * Checks if the pixel at `(x, y)` matches `targetHex` within RGB tolerance when a frame bitmap is available.
-     * If no frame bitmap has been captured yet, returns true so clicking is never blocked.
-     */
+    /** Fail closed: a missing/stale frame must never pretend the requested color matched. */
     fun doesScreenColorMatchIfAvailable(x: Int, y: Int, targetHex: String): Boolean {
-        val bmp = latestScreenBitmap ?: return true
-        if (bmp.isRecycled) return true
-        val targetColor = runCatching { Color.parseColor(targetHex) }.getOrNull() ?: return true
-        val sx = x.coerceIn(0, (bmp.width - 1).coerceAtLeast(0))
-        val sy = y.coerceIn(0, (bmp.height - 1).coerceAtLeast(0))
-        val pixel = runCatching { bmp.getPixel(sx, sy) }.getOrNull() ?: return true
-        val dr = abs(Color.red(pixel) - Color.red(targetColor))
-        val dg = abs(Color.green(pixel) - Color.green(targetColor))
-        val db = abs(Color.blue(pixel) - Color.blue(targetColor))
-        return dr <= 38 && dg <= 38 && db <= 38
+        if (!freshPixels()) return false
+        val bmp = latestScreenBitmap ?: return false
+        if (x !in 0 until sampleScreenWidth || y !in 0 until sampleScreenHeight) return false
+        val target = runCatching { Color.parseColor(targetHex) }.getOrNull() ?: return false
+        val pixel = bmp.getPixel((x.toLong() * bmp.width / sampleScreenWidth).toInt().coerceIn(0, bmp.width - 1),
+            (y.toLong() * bmp.height / sampleScreenHeight).toInt().coerceIn(0, bmp.height - 1))
+        return abs(Color.red(pixel) - Color.red(target)) <= 38 &&
+            abs(Color.green(pixel) - Color.green(target)) <= 38 && abs(Color.blue(pixel) - Color.blue(target)) <= 38
     }
 
     fun setHiddenForScreenshot(hidden: Boolean) {
@@ -279,12 +283,20 @@ internal object CreatorToolsOverlay {
             hideMagnifier()
             onChanged?.invoke()
         } else {
-            showMagnifier(context, onChanged)
+            if (!Settings.canDrawOverlays(context)) {
+                CaptureIntents.toast(context, "Allow display over other apps before using Zoom.")
+                return
+            }
+            val intent = android.content.Intent(context, com.screenkit.screenrecorder.CaptureRequestActivity::class.java)
+                .putExtra(com.screenkit.screenrecorder.CaptureContract.EXTRA_OVERLAY_COMMAND, com.screenkit.screenrecorder.CaptureContract.COMMAND_TOGGLE_MAGNIFIER)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            runCatching { context.startActivity(intent) }.onFailure { CaptureIntents.toast(context, "Open ScreenKit to approve live screen sharing for Zoom.") }
         }
     }
 
     fun showMagnifier(context: Context, onChanged: (() -> Unit)? = null) {
         val ctx = context.applicationContext
+        feedContext = ctx
         if (!Settings.canDrawOverlays(ctx)) {
             CaptureIntents.toast(ctx, "Allow ScreenKit to display over other apps first.")
             return
@@ -338,6 +350,10 @@ internal object CreatorToolsOverlay {
             }
             btnRow.addView(
                 makeSmallChip(ctx, "📋 Hex", 0xFF1E2B30.toInt(), 0xFFB7F36B.toInt()) {
+                    if (!freshPixels()) {
+                        CaptureIntents.toast(ctx, "No fresh screen pixels. Reopen Zoom and approve screen sharing.")
+                        return@makeSmallChip
+                    }
                     val hex = String.format("#%06X", 0xFFFFFF and currentSampleColor)
                     val cb = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                     cb?.setPrimaryClip(ClipData.newPlainText("ScreenKit Color", hex))
@@ -346,6 +362,10 @@ internal object CreatorToolsOverlay {
             )
             btnRow.addView(
                 makeSmallChip(ctx, "🎯 AutoPin", 0xFFB7F36B.toInt(), 0xFF10170D.toInt()) {
+                    if (!freshPixels()) {
+                        CaptureIntents.toast(ctx, "No fresh screen pixels. Reopen Zoom and approve screen sharing.")
+                        return@makeSmallChip
+                    }
                     val hex = String.format("#%06X", 0xFFFFFF and currentSampleColor)
                     SettingsStore.setAutoColorTriggerHex(ctx, hex)
                     SettingsStore.setAutoColorTriggerEnabled(ctx, true)
@@ -362,6 +382,11 @@ internal object CreatorToolsOverlay {
             )
             pill.addView(btnRow)
             root.addView(pill)
+            root.addView(TextView(ctx).apply {
+                text = "▼ target: 20dp below this panel · 3× live"
+                textSize = 9f; gravity = Gravity.CENTER; setTextColor(Color.WHITE)
+                setBackgroundColor(0xEE121A1F.toInt())
+            })
 
             val params = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
@@ -378,9 +403,8 @@ internal object CreatorToolsOverlay {
             }
 
             val drag = makeDragListener(ctx, root, params) { newX, newY ->
-                currentSampleX = newX + loupeSize / 2
-                currentSampleY = newY + loupeSize / 2
-                samplePixelAtReticle()
+                params.y = newY.coerceAtMost((metrics.heightPixels - root.height - dp(ctx, 24)).coerceAtLeast(0))
+                root.post { samplePixelAtReticle() }
             }
             loupe.setOnTouchListener(drag)
             pill.setOnTouchListener(drag)
@@ -390,44 +414,58 @@ internal object CreatorToolsOverlay {
             loupeCanvasView = loupe
             isMagnifierShowing = true
             samplePixelAtReticle()
-            runCatching { wm.addView(root, params) }
+            runCatching { wm.addView(root, params) }.onFailure {
+                hideMagnifier()
+                CaptureIntents.toast(ctx, "Zoom overlay could not open. Check display-over-apps permission.")
+            }
+            root.post {
+                params.y = params.y.coerceAtMost((metrics.heightPixels - root.height - dp(ctx, 24)).coerceAtLeast(0))
+                runCatching { wm.updateViewLayout(root, params) }
+                samplePixelAtReticle()
+            }
+            mainHandler.removeCallbacks(magnifierTicker)
+            mainHandler.post(magnifierTicker)
             ScreenKitAutoService.broadcastState(ctx)
             onChanged?.invoke()
         }
     }
 
     private fun samplePixelAtReticle() {
-        val bmp = latestScreenBitmap
-        if (bmp != null && !bmp.isRecycled) {
-            val sx = currentSampleX.coerceIn(0, (bmp.width - 1).coerceAtLeast(0))
-            val sy = currentSampleY.coerceIn(0, (bmp.height - 1).coerceAtLeast(0))
-            runCatching { currentSampleColor = bmp.getPixel(sx, sy) }
-        } else {
-            // Deterministic vivid color preview based on coordinates until a screenshot frame is sampled
-            val r = ((currentSampleX * 37) % 200) + 45
-            val g = ((currentSampleY * 53) % 200) + 45
-            val b = (((currentSampleX + currentSampleY) * 29) % 200) + 45
-            currentSampleColor = Color.rgb(r, g, b)
+        magnifierView?.let { root ->
+            val location = IntArray(2)
+            root.getLocationOnScreen(location)
+            currentSampleX = location[0] + root.width / 2
+            currentSampleY = location[1] + root.height + dp(root.context, 20)
         }
+        val bmp = latestScreenBitmap
+        if (!freshPixels() || bmp == null || currentSampleX !in 0 until sampleScreenWidth || currentSampleY !in 0 until sampleScreenHeight) {
+            currentSampleColor = Color.TRANSPARENT
+            magnifierInfoTv?.text = "Waiting for live screen pixels…\nProtected content may remain black."
+            loupeCanvasView?.invalidate()
+            return
+        }
+        val sx = (currentSampleX.toLong() * bmp.width / sampleScreenWidth).toInt().coerceIn(0, bmp.width - 1)
+        val sy = (currentSampleY.toLong() * bmp.height / sampleScreenHeight).toInt().coerceIn(0, bmp.height - 1)
+        currentSampleColor = bmp.getPixel(sx, sy)
         val hex = String.format("#%06X", 0xFFFFFF and currentSampleColor)
-        val r = Color.red(currentSampleColor)
-        val g = Color.green(currentSampleColor)
-        val b = Color.blue(currentSampleColor)
-        magnifierInfoTv?.text = "X:$currentSampleX Y:$currentSampleY · $hex\nRGB($r, $g, $b)"
+        magnifierInfoTv?.text = "LIVE X:$currentSampleX Y:$currentSampleY · $hex\nRGB(${Color.red(currentSampleColor)}, ${Color.green(currentSampleColor)}, ${Color.blue(currentSampleColor)})"
         loupeCanvasView?.invalidate()
     }
 
-    fun hideMagnifier() {
+    fun hideMagnifier(stopFeed: Boolean = true) {
         mainHandler.post {
-            val wm = windowManager
-            val ctx = magnifierView?.context
-            magnifierView?.let { v -> runCatching { wm?.removeView(v) } }
-            magnifierView = null
-            magnifierParams = null
-            loupeCanvasView = null
-            magnifierInfoTv = null
+            val ctx = feedContext ?: magnifierView?.context
+            mainHandler.removeCallbacks(magnifierTicker)
+            magnifierView?.let { v -> runCatching { windowManager?.removeView(v) } }
+            magnifierView = null; magnifierParams = null; loupeCanvasView = null; magnifierInfoTv = null
+            latestScreenBitmap?.takeUnless { it.isRecycled }?.recycle()
+            latestScreenBitmap = null; sampledAt = 0L
             isMagnifierShowing = false
-            if (ctx != null) ScreenKitAutoService.broadcastState(ctx)
+            if (ctx != null) {
+                if (stopFeed) com.screenkit.screenrecorder.services.MagnifierCaptureService.stop(ctx)
+                ScreenKitAutoService.broadcastState(ctx)
+            }
+            feedContext = null
         }
     }
 
@@ -456,13 +494,16 @@ internal object CreatorToolsOverlay {
             val radius = (width.coerceAtMost(height) * 0.44f)
 
             val bmp = latestScreenBitmap
-            if (bmp != null && !bmp.isRecycled) {
-                val halfSample = 14
+            if (bmp != null && freshPixels()) {
+                val sx = currentSampleX * bmp.width.toFloat() / sampleScreenWidth
+                val sy = currentSampleY * bmp.height.toFloat() / sampleScreenHeight
+                val halfX = (radius / 3f * bmp.width / sampleScreenWidth).coerceAtLeast(1f)
+                val halfY = (radius / 3f * bmp.height / sampleScreenHeight).coerceAtLeast(1f)
                 srcRect.set(
-                    (currentSampleX - halfSample).coerceAtLeast(0),
-                    (currentSampleY - halfSample).coerceAtLeast(0),
-                    (currentSampleX + halfSample).coerceAtMost(bmp.width),
-                    (currentSampleY + halfSample).coerceAtMost(bmp.height),
+                    (sx - halfX).toInt().coerceIn(0, bmp.width - 1),
+                    (sy - halfY).toInt().coerceIn(0, bmp.height - 1),
+                    (sx + halfX).toInt().coerceIn(1, bmp.width),
+                    (sy + halfY).toInt().coerceIn(1, bmp.height),
                 )
                 dstRect.set(
                     (cx - radius).toInt(),

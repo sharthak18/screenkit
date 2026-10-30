@@ -929,6 +929,7 @@ private fun AutoClickScrollCard(
     onLoadAutoProfile: (Int) -> Unit,
     onSaveAutoProfile: (Int) -> Unit,
 ) {
+    val context = LocalContext.current
     Card(
         shape = RoundedCornerShape(22.dp),
         colors = CardDefaults.cardColors(containerColor = Panel),
@@ -1152,6 +1153,10 @@ private fun AutoClickScrollCard(
                         2500L to "2.5s",
                         4000L to "4s",
                         8000L to "8s",
+                        15000L to "15s",
+                        30000L to "30s",
+                        60000L to "60s",
+                        120000L to "120s",
                     )
                     AutoSettingChipRow(
                         title = "Pause delay between scrolls: ${state.autoScrollIntervalMs}ms",
@@ -1160,6 +1165,16 @@ private fun AutoClickScrollCard(
                         onSelect = { idx -> onAutoScrollIntervalChanged(scrollIntervals[idx].first) },
                     )
 
+                    OutlinedButton(onClick = {
+                        ScrollPreferencesDialog.show(context) {
+                            onAutoScrollIntervalChanged(com.screenkit.screenrecorder.data.SettingsStore.autoScrollIntervalMs(context))
+                        }
+                    }) { Text("Custom seconds / Smart playback") }
+                    Text(
+                        if (state.autoScrollSmartEnabled) "Smart mode: visible playback/ad signals; timer fallback when unavailable. Hold / Next are on the floating scroll bar."
+                        else "Timed mode · Custom delay up to 3600 seconds. Smart playback is opt-in.",
+                        color = Muted, fontSize = 11.sp,
+                    )
                     val scrollDurations = listOf(
                         30 to "30 sec",
                         60 to "1 min",

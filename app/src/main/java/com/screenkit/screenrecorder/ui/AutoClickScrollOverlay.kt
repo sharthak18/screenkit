@@ -89,6 +89,13 @@ internal object AutoClickScrollOverlay {
     private var completedCycles = 0
     private var completedScrolls = 0
     private var executionStartedElapsedMs = 0L
+    private val scrollPolicy = com.screenkit.screenrecorder.automation.SmartScrollPolicy()
+    private var scrollHeld = false
+    private var scrollNextRequested = false
+    private var scrollAdvice = ""
+    private var executionGeneration = 0L
+    private var scrollGestureInFlight = false
+    private var scrollCooldownUntil = 0L
     private var scrollAnchorX = 0
     private var scrollAnchorY = 0
 
@@ -305,6 +312,11 @@ internal object AutoClickScrollOverlay {
         completedCycles = 0
         completedScrolls = 0
         executionStartedElapsedMs = SystemClock.elapsedRealtime()
+        executionGeneration++
+        scrollHeld = false; scrollNextRequested = false; scrollGestureInFlight = false
+        scrollCooldownUntil = 0L
+        scrollPolicy.reset(executionStartedElapsedMs)
+        scrollAdvice = "Waiting before first scroll…"
 
         setPinsTouchable(false)
         scrollGuideView?.invalidate()
@@ -320,6 +332,8 @@ internal object AutoClickScrollOverlay {
 
     private fun stopExecutionInternal() {
         val wasRunning = isExecuting
+        executionGeneration++
+        scrollGestureInFlight = false
         isExecuting = false
         mainHandler.removeCallbacks(tickRunnable)
         mainHandler.removeCallbacks(timerUiRunnable)
@@ -421,7 +435,20 @@ internal object AutoClickScrollOverlay {
     }
 
     private fun runNextScrollStep(ctx: Context, autoService: ScreenKitAutoService) {
-        if (!isExecuting) return
+        if (!isExecuting || scrollGestureInFlight) return
+        val now = SystemClock.elapsedRealtime()
+        val smart = SettingsStore.autoScrollSmartEnabled(ctx)
+        val advice = scrollPolicy.decide(now, SettingsStore.autoScrollIntervalMs(ctx), smart, scrollHeld,
+            if (smart) autoService.observePlayback() else com.screenkit.screenrecorder.automation.PlaybackObservation())
+        scrollAdvice = advice.message
+        if (!scrollNextRequested && (now < scrollCooldownUntil || advice.decision != com.screenkit.screenrecorder.automation.ScrollDecision.NEXT)) {
+            if (advice.decision == com.screenkit.screenrecorder.automation.ScrollDecision.SKIP_AD) autoService.observePlayback(clickSkip = true)
+            updateStatusBanner()
+            mainHandler.postDelayed(tickRunnable, 350L)
+            return
+        }
+        scrollNextRequested = false
+        val generation = executionGeneration
         val wm = windowManager ?: return
         val metrics = realDisplayMetrics(ctx, wm)
         val screenW = metrics.widthPixels.toFloat()
@@ -430,7 +457,7 @@ internal object AutoClickScrollOverlay {
         val jitter = SettingsStore.autoRandomJitter(ctx)
         val direction = SettingsStore.autoScrollDirection(ctx)
         val speedMs = jitterDuration(SettingsStore.autoScrollSpeedMs(ctx), jitter)
-        val intervalMs = jitterDelay(SettingsStore.autoScrollIntervalMs(ctx), jitter)
+        // User-selected viewing time is exact; jitter applies only to the swipe, not the timer.
         val distFraction = (SettingsStore.autoScrollDistancePct(ctx) / 100f).coerceIn(0.20f, 0.85f)
 
         val anchorX = jitterCoord(scrollAnchorX.toFloat().coerceIn(screenW * 0.15f, screenW * 0.85f), jitter)
@@ -466,7 +493,13 @@ internal object AutoClickScrollOverlay {
         scrollGuideView?.invalidate()
         updateStatusBanner()
 
-        autoService.performSwipe(startX, startY, endX, endY, speedMs) {
+        scrollGestureInFlight = true
+        autoService.performSwipe(startX, startY, endX, endY, speedMs) { success ->
+            if (generation != executionGeneration) return@performSwipe
+            scrollGestureInFlight = false
+            scrollPolicy.reset(SystemClock.elapsedRealtime())
+            scrollCooldownUntil = SystemClock.elapsedRealtime() + 1000L
+            if (!success) scrollAdvice = "Swipe interrupted — waiting before retry"
             scrollGuideView?.isFiringNow = false
             scrollGuideView?.invalidate()
             if (!isExecuting) return@performSwipe
@@ -479,7 +512,7 @@ internal object AutoClickScrollOverlay {
                 return@performSwipe
             }
             updateStatusBanner()
-            mainHandler.postDelayed(tickRunnable, intervalMs)
+            mainHandler.postDelayed(tickRunnable, 350L)
         }
     }
 
@@ -806,6 +839,19 @@ internal object AutoClickScrollOverlay {
                 }
             }
             AutoToolMode.SCROLL -> {
+                if (isExecuting) {
+                    btnRow.addView(makeBarPillButton(ctx, if (scrollHeld) "▶ Resume" else "⏸ Hold", 0xFF1F2D33.toInt(), Color.WHITE) {
+                        scrollHeld = !scrollHeld
+                        rebuildControlBar(ctx)
+                    })
+                    btnRow.addView(makeBarPillButton(ctx, "Next ➜", 0xFF1F2D33.toInt(), Color.WHITE) {
+                        scrollNextRequested = true
+                        if (!scrollGestureInFlight) {
+                            mainHandler.removeCallbacks(tickRunnable)
+                            mainHandler.post(tickRunnable)
+                        }
+                    })
+                }
                 val dir = SettingsStore.autoScrollDirection(ctx)
                 btnRow.addView(
                     makeBarPillButton(
@@ -933,7 +979,7 @@ internal object AutoClickScrollOverlay {
                     } else {
                         "${formatSeconds(elapsedSec)} (∞)"
                     }
-                    tv.text = "${dir.arrow} ${dir.label} · #$completedScrolls · $timeLabel"
+                    tv.text = "${dir.arrow} #$completedScrolls · $timeLabel\n$scrollAdvice"
                 } else {
                     val durLabel = if (durSec == 0) "∞" else formatSeconds(durSec)
                     tv.text = "${dir.arrow} ${dir.label} · ${speedMs}ms swipe · ${intervalMs}ms gap · $durLabel"
@@ -1489,6 +1535,9 @@ internal object AutoClickScrollOverlay {
                     2500L to "2.5s",
                     4000L to "4s",
                     8000L to "8s",
+                    30000L to "30s",
+                    60000L to "60s",
+                    120000L to "120s",
                 )
                 addOptionRow(
                     ctx = ctx,
@@ -1502,6 +1551,14 @@ internal object AutoClickScrollOverlay {
                     populatePanel()
                 }
 
+                col.addView(makeBarPillButton(ctx, "Custom seconds / Smart playback", 0xFF1F2D33.toInt(), Color.WHITE) {
+                    if (isExecuting) stopExecutionInternal()
+                    ScrollPreferencesDialog.show(ctx) {
+                        rebuildControlBar(ctx)
+                        ScreenKitAutoService.broadcastState(ctx)
+                        populatePanel()
+                    }
+                })
                 val curDur = SettingsStore.autoScrollDurationSec(ctx)
                 val durOptions = listOf(
                     30 to "30s",
