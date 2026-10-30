@@ -864,13 +864,19 @@ class ScreenCaptureService : Service() {
         var currentY = 0
         frames.forEachIndexed { idx, bmp ->
             if (idx == 0) {
-                canvas.drawBitmap(bmp, 0f, 0f, null)
-                currentY += singleH
+                canvas.drawBitmap(bmp, android.graphics.Rect(0, 0, width, cropBottom),
+                    android.graphics.Rect(0, 0, width, cropBottom), null)
+                currentY += cropBottom
             } else {
                 val src = android.graphics.Rect(0, cropTop, width, cropBottom.coerceAtMost(bmp.height))
                 val dst = android.graphics.Rect(0, currentY, width, currentY + middleSliceH)
                 canvas.drawBitmap(bmp, src, dst, null)
                 currentY += middleSliceH
+            }
+            if (idx == frames.lastIndex) {
+                val footer = singleH - cropBottom
+                canvas.drawBitmap(bmp, android.graphics.Rect(0, cropBottom, width, singleH),
+                    android.graphics.Rect(0, currentY, width, currentY + footer), null)
             }
             bmp.recycle()
         }

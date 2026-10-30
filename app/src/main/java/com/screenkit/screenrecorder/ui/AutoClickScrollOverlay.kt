@@ -786,6 +786,8 @@ internal object AutoClickScrollOverlay {
 
         val statusTv = TextView(ctx).apply {
             textSize = 10.5f
+            maxWidth = (realDisplayMetrics(ctx, wm).widthPixels - dp(ctx, 48)).coerceAtLeast(dp(ctx, 180))
+            maxLines = 3
             setTextColor(0xFFE6F0EC.toInt())
             typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
         }
@@ -840,17 +842,19 @@ internal object AutoClickScrollOverlay {
             }
             AutoToolMode.SCROLL -> {
                 if (isExecuting) {
-                    btnRow.addView(makeBarPillButton(ctx, if (scrollHeld) "▶ Resume" else "⏸ Hold", 0xFF1F2D33.toInt(), Color.WHITE) {
+                    val manualRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
+                    manualRow.addView(makeBarPillButton(ctx, if (scrollHeld) "▶ Resume" else "⏸ Hold", 0xFF1F2D33.toInt(), Color.WHITE) {
                         scrollHeld = !scrollHeld
                         rebuildControlBar(ctx)
                     })
-                    btnRow.addView(makeBarPillButton(ctx, "Next ➜", 0xFF1F2D33.toInt(), Color.WHITE) {
+                    manualRow.addView(makeBarPillButton(ctx, "Next ➜", 0xFF1F2D33.toInt(), Color.WHITE) {
                         scrollNextRequested = true
                         if (!scrollGestureInFlight) {
                             mainHandler.removeCallbacks(tickRunnable)
                             mainHandler.post(tickRunnable)
                         }
                     })
+                    bar.addView(manualRow)
                 }
                 val dir = SettingsStore.autoScrollDirection(ctx)
                 btnRow.addView(

@@ -128,6 +128,7 @@ internal object CreatorToolsOverlay {
             val vis = if (hidden) View.GONE else View.VISIBLE
             teleprompterView?.visibility = vis
             magnifierView?.visibility = vis
+            watermarkView?.visibility = vis
         }
     }
 

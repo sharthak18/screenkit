@@ -46,7 +46,10 @@ internal object PlaybackInspector {
                             }
                         }
                     }
-                    for (i in 0 until node.childCount.coerceAtMost(40)) node.getChild(i)?.let(stack::addLast)
+                    for (i in 0 until node.childCount.coerceAtMost(40)) {
+                        if (SystemClock.uptimeMillis() >= deadline || nodes + stack.size >= 250) break
+                        node.getChild(i)?.let(stack::addLast)
+                    }
                 } finally { node.recycle() }
             }
         } finally { while (stack.isNotEmpty()) stack.removeFirst().recycle() }
