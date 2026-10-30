@@ -39,6 +39,7 @@ class AdBlockVpnService : VpnService() {
     private val main = Handler(Looper.getMainLooper())
     private val closed = AtomicBoolean(false)
     private val failures = AtomicInteger(0)
+    private val failing = AtomicBoolean(false)
     private var started = false
     private var tunnel: ParcelFileDescriptor? = null
     private var gateway: DnsPacketGateway? = null
@@ -211,7 +212,16 @@ class AdBlockVpnService : VpnService() {
             }
         } finally { main.removeCallbacks(deadline); sockets.remove(raw); runCatching { raw.close() } }
     }
-    private fun fail(message: String) { main.post { if (!closed.get()) { AdBlockState.set(message); stopSelf() } } }
+    private fun fail(message: String) {
+        if (!failing.compareAndSet(false, true)) return
+        main.post {
+            if (!closed.get()) {
+                AdBlockState.set(message)
+                android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show()
+                stopSelf()
+            }
+        }
+    }
     private fun notification() = NotificationCompat.Builder(this, CHANNEL)
         .setSmallIcon(R.drawable.ic_stat_capture).setContentTitle("ScreenKit DNS ad filtering")
         .setContentText("${AdBlockState.status.value.blocked} DNS queries blocked · tap to manage")

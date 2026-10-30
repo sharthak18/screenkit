@@ -55,9 +55,13 @@ internal class DnsPacketGateway(
             } }
             return
         }
+        // Port is part of a TCP flow: a TLS probe's RST must not destroy a DNS connection
+        // which happens to use the same client port.
+        if (p.destinationPort != 53) {
+            if (p.flags and 4 == 0) reset(p)
+            return
+        }
         if (p.flags and 4 != 0) { connections.remove(Key(p.source.toList(), p.sourcePort)); return }
-        // Reject Private DNS probing at this synthetic endpoint; it is not a TLS interception server.
-        if (p.destinationPort != 53) { reset(p); return }
         val key = Key(p.source.toList(), p.sourcePort)
         val c = connections[key]
         if (p.flags and 2 != 0) {

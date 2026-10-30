@@ -14,8 +14,8 @@ class DnsFilterTest {
     private fun reverse(port: Int = 53, protocol: Int = 17) = DnsPackets.Packet(
         DnsPackets.DNS_ADDRESS, client, port, 40000, protocol, 0, 0, 0, 8192, byteArrayOf())
     private fun udp(q: ByteArray) = DnsPackets.udp(reverse(), q)
-    private fun tcp(seq: Long, ack: Long, flags: Int, payload: ByteArray = byteArrayOf(), port: Int = 53) =
-        DnsPackets.tcp(reverse(port, 6), seq, ack, flags, payload)
+    private fun tcp(seq: Long, ack: Long, flags: Int, payload: ByteArray = byteArrayOf(), port: Int = 53, window: Int = 8192) =
+        DnsPackets.tcp(reverse(port, 6), seq, ack, flags, payload, window)
     private fun frame(q: ByteArray) = ByteArray(q.size + 2).also { DnsMessage.put16(it, 0, q.size); q.copyInto(it, 2) }
     private fun tcpPayload(packet: ByteArray) = packet.copyOfRange(20 + (packet[32].toInt() ushr 4 and 15) * 4, packet.size)
 
@@ -167,6 +167,40 @@ class DnsFilterTest {
         gateway.accept(tcp(101, server, 0x18, byteArrayOf(0x20, 0)))
         assertEquals(4, output.last()[33].toInt() and 4)
     }
+    @Test fun unrelatedTlsResetDoesNotDestroyDnsConnection() {
+        val output = mutableListOf<ByteArray>()
+        var resolved = 0
+        val gateway = DnsPacketGateway(output::add, { q, done -> resolved++; done(DnsMessage.reply(q, 0)) }, { 0L })
+        gateway.accept(tcp(100, 0, 2))
+        val server = (DnsPackets.u32(output.last(), 24) + 1) and 0xffffffffL
+        gateway.accept(tcp(100, 0, 4, port = 853))
+        gateway.accept(tcp(101, server, 16))
+        gateway.accept(tcp(101, server, 0x18, frame(query())))
+        assertEquals(1, resolved)
+    }
+    @Test fun largeTcpReplyRespectsWindowAndResumesAfterAcknowledgments() {
+        val output = mutableListOf<ByteArray>()
+        val response = DnsMessage.reply(query(), 0).copyOf(65535)
+        val gateway = DnsPacketGateway(output::add, { _, done -> done(response) }, { 0L })
+        gateway.accept(tcp(100, 0, 2))
+        val server = (DnsPackets.u32(output.last(), 24) + 1) and 0xffffffffL
+        gateway.accept(tcp(101, server, 16))
+        val q = frame(query())
+        gateway.accept(tcp(101, server, 0x18, q, window = 0))
+        assertTrue(output.none { tcpPayload(it).isNotEmpty() })
+        val collected = java.io.ByteArrayOutputStream()
+        var ack = server
+        repeat(9) {
+            output.clear()
+            gateway.accept(tcp(101 + q.size.toLong(), ack, 16))
+            val chunk = output.flatMap { tcpPayload(it).toList() }.toByteArray()
+            assertTrue(chunk.size <= 8192)
+            collected.write(chunk)
+            ack = (ack + chunk.size) and 0xffffffffL
+        }
+        assertArrayEquals(frame(response), collected.toByteArray())
+    }
+
     @Test fun arbitraryInputNeverEscapesParserBounds() {
         val random = java.util.Random(7)
         val gateway = DnsPacketGateway({}, { _, _ -> }, { 0L })

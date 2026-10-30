@@ -39,14 +39,14 @@ internal object DnsPackets {
         DnsMessage.put16(segment, 6, transportChecksum(p.destination, p.source, 17, segment).let { if (it == 0) 65535 else it })
         return ip(p.destination, p.source, 17, segment)
     }
-    fun tcp(p: Packet, seq: Long, ack: Long, flags: Int, payload: ByteArray = byteArrayOf()): ByteArray {
+    fun tcp(p: Packet, seq: Long, ack: Long, flags: Int, payload: ByteArray = byteArrayOf(), window: Int = 8192): ByteArray {
         // Advertise MSS 1200 in SYN-ACK. No window scaling/SACK/timestamps negotiated.
         val header = if (flags and 2 != 0) 24 else 20
         val segment = ByteArray(header + payload.size)
         DnsMessage.put16(segment, 0, p.destinationPort); DnsMessage.put16(segment, 2, p.sourcePort)
         put32(segment, 4, seq); put32(segment, 8, ack)
         segment[12] = ((header / 4) shl 4).toByte(); segment[13] = flags.toByte()
-        DnsMessage.put16(segment, 14, 8192)
+        DnsMessage.put16(segment, 14, window)
         if (header == 24) { segment[20] = 2; segment[21] = 4; DnsMessage.put16(segment, 22, 1200) }
         payload.copyInto(segment, header)
         DnsMessage.put16(segment, 16, transportChecksum(p.destination, p.source, 6, segment))

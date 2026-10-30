@@ -55,7 +55,8 @@ Pure Kotlin tests: suffix boundary/case/trailing dot, malformed lists/questions,
 HTTPS questions, ID/type/question validation, NXDOMAIN header flags, EDNS bounds, IPv4/
 UDP/TCP checksums and malformed/fragments rejection, UDP truncation to TCP fallback,
 queue saturation, TCP segmented query/response/duplicate/FIN, handshake retransmission,
-port 853 RST, invalid length reset, shutdown callbacks, and deterministic malformed input.
+port 853 RST/flow isolation, 64KiB TCP reply with zero-window/reopen and ACK pacing,
+invalid length reset, shutdown callbacks, and deterministic malformed input.
 
 These tests do **not** exercise Android's VPN routing, platform TLS, OEM lifecycle, or a
 live social app. Existing capture/automation/streaming tests remain unchanged.
