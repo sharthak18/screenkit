@@ -31,6 +31,52 @@ class SmartScrollPolicyTest {
         assertEquals(ScrollDecision.WAIT, tick(p, 41_000, content.copy(progress = 0.05), delay = 8000).decision)
         assertEquals(ScrollDecision.WAIT, tick(p, 43_000, content.copy(progress = 0.82), delay = 8000).decision)
     }
+    @Test fun adPodFlickerDoesNotConsumeContentTimer() {
+        val p = SmartScrollPolicy().apply { reset(0) }
+        tick(p, 100, content.copy(adBreak = true), delay = 200)
+        // Short gaps between ads must not trigger a swipe, even with the shortest timer.
+        for (time in listOf(450L, 800L, 1150L)) {
+            assertEquals(ScrollDecision.WAIT, tick(p, time, delay = 200).decision)
+        }
+        assertEquals(ScrollDecision.WAIT, tick(p, 1500, content.copy(adBreak = true), delay = 200).decision)
+        for (time in listOf(1850L, 2850L, 3850L)) {
+            assertEquals(ScrollDecision.WAIT, tick(p, time, delay = 200).decision)
+        }
+        assertEquals(ScrollDecision.NEXT, tick(p, 4200, delay = 200).decision)
+    }
+
+    @Test fun resumedContentGetsFullDelayAfterConfirmation() {
+        val p = SmartScrollPolicy().apply { reset(0) }
+        tick(p, 100, content.copy(adBreak = true), delay = 3000)
+        for (time in listOf(450L, 1450L, 2450L, 3450L, 4450L)) {
+            assertEquals(ScrollDecision.WAIT, tick(p, time, delay = 3000).decision)
+        }
+        assertEquals(ScrollDecision.NEXT, tick(p, 5450, delay = 3000).decision)
+    }
+
+    @Test fun manualHoldAndUnknownWindowCannotConfirmAdEnded() {
+        for (manualHold in listOf(true, false)) {
+            val p = SmartScrollPolicy().apply { reset(0) }
+            tick(p, 100, content.copy(adBreak = true), delay = 200)
+            tick(p, 450, delay = 200)
+            tick(p, 5000, if (manualHold) content else PlaybackObservation(), delay = 200, hold = manualHold)
+            // Coming back starts a fresh confirmation, not an immediate content timer.
+            for (time in listOf(5350L, 5700L, 6700L, 7700L)) {
+                assertEquals(ScrollDecision.WAIT, tick(p, time, delay = 200).decision)
+            }
+            assertEquals(ScrollDecision.NEXT, tick(p, 8050, delay = 200).decision)
+        }
+    }
+
+    @Test fun skipButtonDuringAdPodStillUsesCooldown() {
+        val p = SmartScrollPolicy().apply { reset(0) }
+        val skip = content.copy(skipAvailable = true)
+        assertEquals(ScrollDecision.SKIP_AD, tick(p, 100, skip).decision)
+        tick(p, 450)
+        assertEquals(ScrollDecision.WAIT, tick(p, 800, skip).decision)
+        assertEquals(ScrollDecision.SKIP_AD, tick(p, 3100, skip).decision)
+    }
+
     @Test fun visibleVideoProgressOverridesShortFixedTimer() {
         val p = SmartScrollPolicy().apply { reset(0) }
         tick(p, 100, content.copy(progress = 0.01))

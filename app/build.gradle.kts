@@ -14,8 +14,8 @@ android {
         applicationId = "com.screenkit.screenrecorder"
         minSdk = 24
         targetSdk = 34
-        versionCode = 9
-        versionName = "2.1.1"
+        versionCode = 10
+        versionName = "2.1.2"
     }
 
     compileOptions {

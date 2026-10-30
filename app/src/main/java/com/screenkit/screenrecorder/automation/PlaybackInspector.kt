@@ -6,6 +6,25 @@ import android.os.SystemClock
 /** On-device, bounded inspection, invoked only while user-enabled smart scrolling is running. */
 internal object PlaybackInspector {
     private val packages = setOf("com.google.android.youtube", "com.instagram.android", "com.facebook.katana", "com.facebook.lite")
+    /** Some apps expose the Skip ad text as a child of the actual button. Never click a broad feed container. */
+    @Suppress("DEPRECATION")
+    private fun skipTarget(node: AccessibilityNodeInfo, app: String, deadline: Long): AccessibilityNodeInfo? {
+        var candidate: AccessibilityNodeInfo? = AccessibilityNodeInfo.obtain(node)
+        repeat(3) { depth ->
+            val current = candidate ?: return null
+            if (SystemClock.uptimeMillis() >= deadline || !current.isVisibleToUser ||
+                !current.isEnabled || current.packageName?.toString() != app ||
+                (depth > 0 && (current.childCount > 5 || current.isScrollable))) {
+                current.recycle()
+                return null
+            }
+            if (current.isClickable) return current // Caller owns this copy.
+            candidate = if (depth < 2) current.parent else null
+            current.recycle()
+        }
+        return null
+    }
+
     @Suppress("DEPRECATION")
     fun inspect(root: AccessibilityNodeInfo?, clickSkip: Boolean = false): PlaybackObservation {
         root ?: return PlaybackObservation()
@@ -40,9 +59,14 @@ internal object PlaybackInspector {
                         labels.filter { it.length <= 70 }.forEach {
                             ad = ad || PlaybackLabels.adBreak(it)
                             sponsored = sponsored || PlaybackLabels.sponsored(it)
-                            if (PlaybackLabels.skip(it) && node.isClickable && node.isEnabled) {
-                                skip = true
-                                if (clickSkip && !clicked) clicked = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                            if (PlaybackLabels.skip(it)) {
+                                val target = skipTarget(node, app, deadline)
+                                if (target != null) {
+                                    try {
+                                        skip = true
+                                        if (clickSkip && !clicked) clicked = target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                                    } finally { target.recycle() }
+                                }
                             }
                         }
                     }

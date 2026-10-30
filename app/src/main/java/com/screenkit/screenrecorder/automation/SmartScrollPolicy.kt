@@ -20,27 +20,33 @@ internal class SmartScrollPolicy {
     private var progressSeenAt = 0L
     private var app = ""
     private var skipAttemptAt = -10_000L
-    private var resumedAfterAdAt = -10_000L
+    private var adClearSince: Long? = null
     private var inAd = false
 
     fun reset(now: Long) {
         lastTick = now; watchMs = 0; previousProgress = null; progressSeenAt = 0
-        skipAttemptAt = -10_000L; resumedAfterAdAt = -10_000L; inAd = false; app = ""
+        skipAttemptAt = -10_000L; adClearSince = null; inAd = false; app = ""
     }
     fun decide(now: Long, intervalMs: Long, smart: Boolean, hold: Boolean, observation: PlaybackObservation): ScrollAdvice {
         val elapsed = (now - lastTick).coerceIn(0, 1000)
         lastTick = now
-        if (hold) return ScrollAdvice(ScrollDecision.WAIT, "HOLD · tap Resume or Next")
+        if (hold) {
+            adClearSince = null
+            return ScrollAdvice(ScrollDecision.WAIT, "HOLD · tap Resume or Next")
+        }
         if (!smart) {
             watchMs += elapsed
             return timed(intervalMs)
         }
-        if (!observation.supported) return ScrollAdvice(ScrollDecision.WAIT, "Smart: open YouTube, Instagram or Facebook")
+        if (!observation.supported) {
+            adClearSince = null
+            return ScrollAdvice(ScrollDecision.WAIT, "Smart: open YouTube, Instagram or Facebook")
+        }
         if (app != observation.packageName) {
             reset(now); app = observation.packageName
         }
         if (observation.adBreak || observation.skipAvailable) {
-            inAd = true
+            inAd = true; adClearSince = null
             // A skip command is only a click on a currently visible, labelled Skip ad button.
             if (observation.skipAvailable && now - skipAttemptAt >= 3000) {
                 skipAttemptAt = now
@@ -49,11 +55,16 @@ internal class SmartScrollPolicy {
             return ScrollAdvice(ScrollDecision.WAIT, "Ad break · holding this video until it resumes")
         }
         if (inAd) {
-            inAd = false; resumedAfterAdAt = now; watchMs = 0
-            previousProgress = null; progressSeenAt = 0
+            // Require a stable absence of ad controls: labels can disappear between ads in a pod.
+            val clearSince = adClearSince
+            if (clearSince == null) adClearSince = now
+            else if (now - clearSince >= 2000) {
+                inAd = false; adClearSince = null; watchMs = 0
+                previousProgress = null; progressSeenAt = 0
+            }
+            // Never count the confirmation interval as content viewing time or infer a loop from it.
+            return ScrollAdvice(ScrollDecision.WAIT, "Content resuming after ad…")
         }
-        // Don't interpret an ad-to-content progress jump or a briefly lingering sponsor label as an end.
-        if (now - resumedAfterAdAt < 2000) return ScrollAdvice(ScrollDecision.WAIT, "Content resuming after ad…")
         if (observation.sponsoredFeed && watchMs >= 1200) return ScrollAdvice(ScrollDecision.NEXT, "Skipping labelled sponsored feed item")
         if (observation.paused) return ScrollAdvice(ScrollDecision.WAIT, "Video paused · waiting for playback")
         watchMs += elapsed

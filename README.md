@@ -1,4 +1,4 @@
-# ScreenKit (v2.1.1)
+# ScreenKit (v2.1.2)
 
 A native, high-performance Android capture, creator studio & screen automation suite built with Modern Android Architecture (Jetpack Compose, CameraX, Foreground Services, Accessibility Gesture Engine, MediaProjection, OpenGL ES, MediaMuxer/MediaExtractor, and MediaCodec). ScreenKit v2.1.0 adds **Go Live screen streaming to YouTube, Facebook, and custom RTMP/RTMPS destinations** alongside screen recording with **Pause & Resume**, custom area cropping, **Scrolling Long Screenshots ("Stitch Full Page")**, built-in **MP4 Video Trimmer, Animated GIF Maker & PNG Frame Extractor**, sequential multi-target **Auto Clicking (`1 → 2 → 3 → 4…`)**, directional **Auto Scrolling (`↑ / ↓ / ← / →`)**, **Touch Macro Recorder & Replay**, **Saved Auto-Clicker Profiles (Slots 1–3)**, **Anti-Detection Human Jitter**, **Smart Color / Pixel Trigger (`#HEX`)**, **Floating Teleprompter**, **On-Screen Magnifier Loupe & Color Eyedropper**, **Creator Watermark Badge**, **Shake / Volume-Down Emergency Stop**, **Live Usage Analytics & One-Tap In-App Updater**, live interactive brush annotation, on-screen touch visualization, a draggable floating camera lens, amplified sound recording (Mic / Device Audio / Mixed), and a built-in Black-Screen Bypass Web Capture Browser.
 
@@ -14,15 +14,31 @@ Android-only automation/overlay and protected-capture features are not ported.
 
 ## Download and Install
 
-[⬇️ **Download the latest ScreenKit v2.1.1 APK**](https://github.com/sharthak18/ScreenKit/releases/latest/download/ScreenKit.apk)
+[⬇️ **Download the latest ScreenKit v2.1.2 APK**](https://github.com/sharthak18/ScreenKit/releases/latest/download/ScreenKit.apk)
 
-- **Current Version**: `v2.1.1` (`versionCode = 9`)
+- **Current Version**: `v2.1.2` (`versionCode = 10`)
 - Compatible with **Android 7.0 (API 24) to Android 15 (API 35)**.
 - Device Audio & Mixed (`Mic + Device`) playback capture supported on **Android 10+**.
 - Full screen scope and single-app exclusion selection supported on **Android 14+**.
 - On Android, open the downloaded APK and follow the system prompt. Allow "Install unknown apps" for your browser or file manager if prompted.
 
 ---
+
+## Updated in v2.1.2
+
+- Removed **Zoom** from the floating menu; the underlying magnifier is not deleted.
+  **Long SS** remains on the third row.
+- Smart playback now looks for the button immediately around visible **Skip ad** text
+  when the text itself is not clickable. Searches remain package-scoped, visible-only,
+  time-bounded, and reject scrollable/broad ancestor containers.
+- Ad breaks require two seconds of stable ad-label absence before restarting the content
+  timer. Brief gaps between consecutive ads do not spend the next video's viewing time.
+  Hold or an unknown foreground window restarts this confirmation.
+- No root, VPN, DNS interception, TLS interception, or new permissions added. This is
+  visible-control assistance, **not universal ad blocking**. Network filters can block
+  separate ad domains but cannot reliably separate ads and video on shared endpoints.
+- Automated policy tests cover ad-pod flicker, resumed-content timing, interrupted
+  confirmation, and skip cooldown. Social-app/device behavior still requires physical testing.
 
 ## Fixed in v2.1.1
 

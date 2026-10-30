@@ -538,12 +538,6 @@ class FloatingOverlayService : Service() {
                 MenuAction("⊙", "Touch", CaptureContract.COMMAND_TOGGLE_TOUCHES, touchesActive),
                 MenuAction("⇅", "Scroll", CaptureContract.COMMAND_OPEN_AUTO_SCROLL, autoScrollActive),
                 MenuAction(
-                    "🔍",
-                    "Zoom",
-                    CaptureContract.COMMAND_TOGGLE_MAGNIFIER,
-                    CreatorToolsOverlay.isMagnifierShowing,
-                ),
-                MenuAction(
                     "▤",
                     "Script",
                     CaptureContract.COMMAND_TOGGLE_TELEPROMPTER,
