@@ -1,6 +1,7 @@
 package com.screenkit.screenrecorder.services
 
 import android.app.Notification
+import com.screenkit.screenrecorder.adblock.AdBlockVpnService
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -226,6 +227,7 @@ class FloatingOverlayService : Service() {
             ACTION_HIDE -> {
                 removeOverlay()
                 isRunning = false
+                AdBlockVpnService.stopWithOverlay(this)
                 SettingsStore.setOverlayEnabled(this, false)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf(startId)
@@ -240,6 +242,7 @@ class FloatingOverlayService : Service() {
                 promoteToForeground()
                 isRunning = true
                 SettingsStore.setOverlayEnabled(this, true)
+                AdBlockVpnService.startIfEnabled(this)
                 screenRecording = ScreenCaptureService.isRecording
                 cameraRecording = CameraCaptureService.isRecording
                 cameraPreview = CameraCaptureService.isPreviewVisible
@@ -1213,6 +1216,7 @@ class FloatingOverlayService : Service() {
 
     @Suppress("DEPRECATION")
     override fun onDestroy() {
+        AdBlockVpnService.stopWithOverlay(this)
         if (receiverRegistered) {
             runCatching { unregisterReceiver(stateReceiver) }
             receiverRegistered = false

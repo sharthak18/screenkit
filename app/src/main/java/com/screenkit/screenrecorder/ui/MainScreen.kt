@@ -190,6 +190,8 @@ internal fun MainScreen(
                     onToggleCameraRecording = onToggleCameraRecording,
                     onProjectionScopeSelected = onProjectionScopeSelected,
                 )
+                AdBlockCard()
+
                 LiveStreamCard(
                     busy = state.screenSessionActive || state.cameraRecording,
                     audioMode = state.audioMode,

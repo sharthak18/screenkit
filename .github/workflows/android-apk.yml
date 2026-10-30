@@ -99,8 +99,8 @@ jobs:
       - name: Publish APK to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v2.1.2' }}
-          name: ScreenKit ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v2.1.2' }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v2.2.0' }}
+          name: ScreenKit ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v2.2.0' }}
           target_commitish: ${{ github.sha }}
           make_latest: true
           generate_release_notes: true

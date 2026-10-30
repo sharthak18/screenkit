@@ -1,4 +1,4 @@
-# ScreenKit (v2.1.2)
+# ScreenKit (v2.2.0)
 
 A native, high-performance Android capture, creator studio & screen automation suite built with Modern Android Architecture (Jetpack Compose, CameraX, Foreground Services, Accessibility Gesture Engine, MediaProjection, OpenGL ES, MediaMuxer/MediaExtractor, and MediaCodec). ScreenKit v2.1.0 adds **Go Live screen streaming to YouTube, Facebook, and custom RTMP/RTMPS destinations** alongside screen recording with **Pause & Resume**, custom area cropping, **Scrolling Long Screenshots ("Stitch Full Page")**, built-in **MP4 Video Trimmer, Animated GIF Maker & PNG Frame Extractor**, sequential multi-target **Auto Clicking (`1 → 2 → 3 → 4…`)**, directional **Auto Scrolling (`↑ / ↓ / ← / →`)**, **Touch Macro Recorder & Replay**, **Saved Auto-Clicker Profiles (Slots 1–3)**, **Anti-Detection Human Jitter**, **Smart Color / Pixel Trigger (`#HEX`)**, **Floating Teleprompter**, **On-Screen Magnifier Loupe & Color Eyedropper**, **Creator Watermark Badge**, **Shake / Volume-Down Emergency Stop**, **Live Usage Analytics & One-Tap In-App Updater**, live interactive brush annotation, on-screen touch visualization, a draggable floating camera lens, amplified sound recording (Mic / Device Audio / Mixed), and a built-in Black-Screen Bypass Web Capture Browser.
 
@@ -14,15 +14,48 @@ Android-only automation/overlay and protected-capture features are not ported.
 
 ## Download and Install
 
-[⬇️ **Download the latest ScreenKit v2.1.2 APK**](https://github.com/sharthak18/ScreenKit/releases/latest/download/ScreenKit.apk)
+[⬇️ **Download the latest ScreenKit v2.2.0 APK**](https://github.com/sharthak18/ScreenKit/releases/latest/download/ScreenKit.apk)
 
-- **Current Version**: `v2.1.2` (`versionCode = 10`)
+- **Current Version**: `v2.2.0` (`versionCode = 11`)
 - Compatible with **Android 7.0 (API 24) to Android 15 (API 35)**.
 - Device Audio & Mixed (`Mic + Device`) playback capture supported on **Android 10+**.
 - Full screen scope and single-app exclusion selection supported on **Android 14+**.
 - On Android, open the downloaded APK and follow the system prompt. Allow "Install unknown apps" for your browser or file manager if prompted.
 
 ---
+
+## New in v2.2.0 — optional network ad filtering
+
+Open **Network ad filtering → Set up filtering** in ScreenKit. Read the disclosure,
+allow the Android VPN request, and leave floating controls running. After this opt-in,
+filtering automatically starts with the floating service (even over other apps), and
+closing the bubble stops it. **Turn off** in the card or notification also disables
+future automatic starts. This is **not** Android's Always-on VPN/lockdown mode.
+
+- A DNS-only, local split VPN routes **only its virtual DNS address**. Normal web/video
+  traffic stays on the underlying network; no general traffic tunnel, root, installed
+  certificate, HTTP interception, or TLS decryption of other apps.
+- A small bundled starter list blocks known advertising domains and their subdomains.
+  It is deliberately **not comprehensive** and does not fetch remote lists or updates.
+  Allowed questions go to **Cloudflare DNS over TLS** (port 853, system certificate and
+  hostname validation). Cloudflare receives those domains and the device's public IP;
+  [its resolver privacy policy](https://developers.cloudflare.com/1.1.1.1/privacy/public-dns-resolver/)
+  applies. ScreenKit logs/saves no names or DNS history. Counts are in-memory per session.
+- Only one VPN can run. ScreenKit won't automatically replace another VPN. Strict Android
+  Private DNS must be turned off first; apps using custom DNS/DoH can bypass the filter.
+  IPv6 application traffic is left alone; ordinary AAAA queries through the virtual DNS
+  resolver can still be filtered. IPv6-only upstream uses Cloudflare's IPv6 address.
+- It **cannot promise removal of YouTube/Facebook/Instagram video ads**, same-host ads,
+  cached/preloaded ads or apps' own encrypted DNS. Domain filtering can break a site/app;
+  use Turn off to restore normal DNS. "Queries blocked" does not mean "ads removed".
+- Repeated upstream failures close the VPN and restore normal networking (**fail open**).
+  No automatic restart loop. Open the card to retry. Android permission revocation turns
+  the preference off. No boot receiver or Android Always-on/lockdown support.
+- Adds `ACCESS_NETWORK_STATE` and the system-protected VPN service; consent is never
+  requested silently. Notification shows activity and a Turn off action (if notifications
+  are allowed). Build/tests do not substitute for real-device network testing.
+
+See [architecture, limitations and device tests](docs/android-dns-filter.md).
 
 ## Updated in v2.1.2
 
