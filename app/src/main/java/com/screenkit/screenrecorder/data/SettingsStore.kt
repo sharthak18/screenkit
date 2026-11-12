@@ -334,10 +334,15 @@ internal object SettingsStore {
 
     /** Delay / pause between consecutive scroll gestures in ms. */
     fun autoScrollIntervalMs(context: Context): Long =
-        prefs(context).getLong(CaptureContract.PREF_AUTO_SCROLL_INTERVAL_MS, 1500L).coerceIn(200L, 60_000L)
+        prefs(context).getLong(CaptureContract.PREF_AUTO_SCROLL_INTERVAL_MS, 1500L).coerceIn(200L, 3_600_000L)
 
     fun setAutoScrollIntervalMs(context: Context, intervalMs: Long) {
-        prefs(context).edit().putLong(CaptureContract.PREF_AUTO_SCROLL_INTERVAL_MS, intervalMs.coerceIn(200L, 60_000L)).apply()
+        prefs(context).edit().putLong(CaptureContract.PREF_AUTO_SCROLL_INTERVAL_MS, intervalMs.coerceIn(200L, 3_600_000L)).apply()
+    }
+
+    fun autoScrollSmartEnabled(context: Context): Boolean = prefs(context).getBoolean("auto_scroll_smart_v1", false)
+    fun setAutoScrollSmartEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("auto_scroll_smart_v1", enabled).apply()
     }
 
     /** How long the auto-scrolling will run in seconds (0 = Infinite until stopped). */

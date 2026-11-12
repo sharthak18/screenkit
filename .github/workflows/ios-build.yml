@@ -1,0 +1,72 @@
+name: iOS Build
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, 'arena/**']
+    paths: ['ios/**', '.github/workflows/ios-build.yml']
+  pull_request:
+    paths: ['ios/**', '.github/workflows/ios-build.yml']
+permissions:
+  contents: read
+  issues: write
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: xcodebuild -version && swift --version
+      - name: Core unit tests
+        run: |
+          set -o pipefail
+          swift test --package-path ios/ScreenKitCore 2>&1 | tee /tmp/ios-tests.log
+      - name: Generate native Xcode project
+        run: |
+          brew install xcodegen
+          ios/scripts/generate.sh
+      - name: Build iPhone and iPad app with broadcast extension (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild -project ios/ScreenKit.xcodeproj -scheme ScreenKit -configuration Release \
+            -destination 'generic/platform=iOS' -derivedDataPath ios/build/device \
+            CODE_SIGNING_ALLOWED=NO build 2>&1 | tee /tmp/ios-build.log
+      - name: Build simulator app
+        run: |
+          set -o pipefail
+          xcodebuild -project ios/ScreenKit.xcodeproj -scheme ScreenKit -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath ios/build/simulator \
+            CODE_SIGNING_ALLOWED=NO build 2>&1 | tee /tmp/ios-simulator.log
+          ditto -c -k --sequesterRsrc --keepParent ios/build/simulator/Build/Products/Debug-iphonesimulator/ScreenKit.app ios/build/ScreenKit-Simulator.zip
+      - name: Build artifacts (not installable on iPhone)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScreenKit-iOS-unsigned-and-simulator
+          path: |
+            ios/build/ScreenKit-Simulator.zip
+            ios/build/device/Build/Products/Release-iphoneos/
+            ios/ScreenKit.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+          retention-days: 14
+      - name: Post diagnostics on failure
+        if: failure() && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "iOS build failed on ${{ github.ref_name }} @ ${{ github.sha }}"
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo '```text'
+            cat /tmp/ios-tests.log /tmp/ios-build.log /tmp/ios-simulator.log 2>/dev/null | tail -c 24000 || true
+            echo '```'
+          } > /tmp/ios-diagnostics.md
+          gh issue comment 4 --body-file /tmp/ios-diagnostics.md
+      - name: Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-logs
+          path: /tmp/ios-*.log
+          if-no-files-found: ignore

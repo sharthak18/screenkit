@@ -116,6 +116,9 @@ internal fun MainScreen(
     onTakeScreenshot: () -> Unit,
     onTakePartialScreenshot: () -> Unit,
     onTakeLongScreenshot: () -> Unit = {},
+    onStartLive: (com.screenkit.screenrecorder.streaming.LiveStreamConfig) -> Unit = {},
+    onStopLive: () -> Unit = {},
+    onMuteLive: () -> Unit = {},
     onToggleScreenRecording: () -> Unit,
     onPauseResumeScreenRecording: () -> Unit = {},
     onTogglePartialScreenRecording: () -> Unit,
@@ -186,6 +189,14 @@ internal fun MainScreen(
                     onTogglePartialScreenRecording = onTogglePartialScreenRecording,
                     onToggleCameraRecording = onToggleCameraRecording,
                     onProjectionScopeSelected = onProjectionScopeSelected,
+                )
+                AdBlockCard()
+
+                LiveStreamCard(
+                    busy = state.screenSessionActive || state.cameraRecording,
+                    audioMode = state.audioMode,
+                    onAudioMode = onAudioModeSelected,
+                    onStart = onStartLive, onStop = onStopLive, onMute = onMuteLive,
                 )
                 AutoClickScrollCard(
                     state = state,
@@ -449,9 +460,10 @@ private fun CaptureActions(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     ActionIcon(Icons.Filled.FiberManualRecord, Color(0xFFFF6671), "rec")
                     Column(Modifier.padding(start = 12.dp).weight(1f)) {
-                        Text("Screen recording", color = SoftWhite, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Text(if (state.liveStreaming) "Live screen sharing" else "Screen recording", color = SoftWhite, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         Text(
-                            if (state.screenPaused) "PAUSED · Tap Resume to continue recording"
+                            if (state.liveStreaming) "Broadcasting screen · No local MP4"
+                            else if (state.screenPaused) "PAUSED · Tap Resume to continue recording"
                             else "H.264 MP4 · Full or partial area · Pause/Resume supported",
                             color = if (state.screenPaused) Color(0xFFFFC857) else Muted,
                             fontSize = 11.sp,
@@ -464,6 +476,7 @@ private fun CaptureActions(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     ActionButton(
                         label = when {
+                            state.liveStreaming -> "End live stream"
                             state.screenRecording -> "Stop & save"
                             state.screenSessionActive -> "Busy…"
                             else -> "Record whole screen"
@@ -474,7 +487,7 @@ private fun CaptureActions(
                         onClick = onToggleScreenRecording,
                         modifier = Modifier.weight(1f),
                     )
-                    if (state.screenRecording) {
+                    if (state.screenRecording && !state.liveStreaming) {
                         OutlinedButton(
                             onClick = onPauseResumeScreenRecording,
                             shape = RoundedCornerShape(14.dp),
@@ -918,6 +931,7 @@ private fun AutoClickScrollCard(
     onLoadAutoProfile: (Int) -> Unit,
     onSaveAutoProfile: (Int) -> Unit,
 ) {
+    val context = LocalContext.current
     Card(
         shape = RoundedCornerShape(22.dp),
         colors = CardDefaults.cardColors(containerColor = Panel),
@@ -1141,6 +1155,10 @@ private fun AutoClickScrollCard(
                         2500L to "2.5s",
                         4000L to "4s",
                         8000L to "8s",
+                        15000L to "15s",
+                        30000L to "30s",
+                        60000L to "60s",
+                        120000L to "120s",
                     )
                     AutoSettingChipRow(
                         title = "Pause delay between scrolls: ${state.autoScrollIntervalMs}ms",
@@ -1149,6 +1167,16 @@ private fun AutoClickScrollCard(
                         onSelect = { idx -> onAutoScrollIntervalChanged(scrollIntervals[idx].first) },
                     )
 
+                    OutlinedButton(onClick = {
+                        ScrollPreferencesDialog.show(context) {
+                            onAutoScrollIntervalChanged(com.screenkit.screenrecorder.data.SettingsStore.autoScrollIntervalMs(context))
+                        }
+                    }) { Text("Custom seconds / Smart playback") }
+                    Text(
+                        if (state.autoScrollSmartEnabled) "Smart mode: visible playback/ad signals; timer fallback when unavailable. Hold / Next are on the floating scroll bar."
+                        else "Timed mode · Custom delay up to 3600 seconds. Smart playback is opt-in.",
+                        color = Muted, fontSize = 11.sp,
+                    )
                     val scrollDurations = listOf(
                         30 to "30 sec",
                         60 to "1 min",

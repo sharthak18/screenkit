@@ -1,0 +1,32 @@
+# ScreenKit starter list, maintained in this repository (2026-10-30).
+# Domain facts only; no externally downloaded subscription or copied third-party list.
+# Conservative advertising endpoints, NOT broad google.com/facebook.com/video CDNs.
+# This is a small starter list, not comprehensive protection.
+doubleclick.net
+googlesyndication.com
+googleadservices.com
+googletagservices.com
+adservice.google.com
+amazon-adsystem.com
+adnxs.com
+adsrvr.org
+advertising.com
+adtechus.com
+adcolony.com
+applovin.com
+applvn.com
+chartboost.com
+inmobi.com
+inmobi.net
+mopub.com
+pubmatic.com
+rubiconproject.com
+openx.net
+casalemedia.com
+criteo.com
+criteo.net
+smartadserver.com
+outbrain.com
+taboola.com
+unityads.unity3d.com
+vungle.com

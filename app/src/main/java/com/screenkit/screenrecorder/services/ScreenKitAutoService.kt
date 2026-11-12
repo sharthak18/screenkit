@@ -31,7 +31,13 @@ class ScreenKitAutoService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // ScreenKit does not read window content; it only dispatches user-started gestures.
+        // No event text is stored. Visible controls are queried only by opt-in smart scrolling.
+    }
+
+    internal fun observePlayback(clickSkip: Boolean = false): com.screenkit.screenrecorder.automation.PlaybackObservation {
+        if (!AutoClickScrollOverlay.isExecuting || !SettingsStore.autoScrollSmartEnabled(this))
+            return com.screenkit.screenrecorder.automation.PlaybackObservation()
+        return com.screenkit.screenrecorder.automation.PlaybackInspector.inspect(rootInActiveWindow, clickSkip)
     }
 
     override fun onInterrupt() {
@@ -42,11 +48,12 @@ class ScreenKitAutoService : AccessibilityService() {
         if (event != null &&
             event.action == KeyEvent.ACTION_DOWN &&
             event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN &&
-            AutoClickScrollOverlay.isExecuting &&
+            (AutoClickScrollOverlay.isExecuting || ScreenCaptureService.isLive) &&
             SettingsStore.volumeKeyStopEnabled(this)
         ) {
-            AutoClickScrollOverlay.stopExecution()
-            CaptureIntents.toast(this, "Volume Down pressed: Auto Click / Scroll stopped.")
+            if (AutoClickScrollOverlay.isExecuting) AutoClickScrollOverlay.stopExecution()
+            if (ScreenCaptureService.isLive) CaptureIntents.stopScreenCapture(this)
+            CaptureIntents.toast(this, "Volume Down pressed: active live stream / automation stopped.")
             return true
         }
         return super.onKeyEvent(event)

@@ -1,14 +1,22 @@
-# ScreenKit (v2.0.0)
+# ScreenKit (v2.2.0)
 
-A native, high-performance Android capture, creator studio & screen automation suite built with Modern Android Architecture (Jetpack Compose, CameraX, Foreground Services, Accessibility Gesture Engine, MediaProjection, OpenGL ES, MediaMuxer/MediaExtractor, and MediaCodec). ScreenKit v2.0.0 delivers screen recording with **Pause & Resume**, custom area cropping, **Scrolling Long Screenshots ("Stitch Full Page")**, built-in **MP4 Video Trimmer, Animated GIF Maker & PNG Frame Extractor**, sequential multi-target **Auto Clicking (`1 → 2 → 3 → 4…`)**, directional **Auto Scrolling (`↑ / ↓ / ← / →`)**, **Touch Macro Recorder & Replay**, **Saved Auto-Clicker Profiles (Slots 1–3)**, **Anti-Detection Human Jitter**, **Smart Color / Pixel Trigger (`#HEX`)**, **Floating Teleprompter**, **On-Screen Magnifier Loupe & Color Eyedropper**, **Creator Watermark Badge**, **Shake / Volume-Down Emergency Stop**, **Live Usage Analytics & One-Tap In-App Updater**, live interactive brush annotation, on-screen touch visualization, a draggable floating camera lens, amplified sound recording (Mic / Device Audio / Mixed), and a built-in Black-Screen Bypass Web Capture Browser.
+A native, high-performance Android capture, creator studio & screen automation suite built with Modern Android Architecture (Jetpack Compose, CameraX, Foreground Services, Accessibility Gesture Engine, MediaProjection, OpenGL ES, MediaMuxer/MediaExtractor, and MediaCodec). ScreenKit v2.1.0 adds **Go Live screen streaming to YouTube, Facebook, and custom RTMP/RTMPS destinations** alongside screen recording with **Pause & Resume**, custom area cropping, **Scrolling Long Screenshots ("Stitch Full Page")**, built-in **MP4 Video Trimmer, Animated GIF Maker & PNG Frame Extractor**, sequential multi-target **Auto Clicking (`1 → 2 → 3 → 4…`)**, directional **Auto Scrolling (`↑ / ↓ / ← / →`)**, **Touch Macro Recorder & Replay**, **Saved Auto-Clicker Profiles (Slots 1–3)**, **Anti-Detection Human Jitter**, **Smart Color / Pixel Trigger (`#HEX`)**, **Floating Teleprompter**, **On-Screen Magnifier Loupe & Color Eyedropper**, **Creator Watermark Badge**, **Shake / Volume-Down Emergency Stop**, **Live Usage Analytics & One-Tap In-App Updater**, live interactive brush annotation, on-screen touch visualization, a draggable floating camera lens, amplified sound recording (Mic / Device Audio / Mixed), and a built-in Black-Screen Bypass Web Capture Browser.
 
 ---
 
+## iPhone and iPad
+
+A native **iOS 17+** companion now lives in [`ios/`](ios/README.md): SwiftUI recording,
+local video tools, and a ReplayKit RTMP/RTMPS broadcast extension. It requires Xcode
+and Apple signing; it is not an APK conversion or an unsigned iPhone download.
+See the [iOS setup guide](ios/README.md) and [device-test checklist](ios/TESTING.md).
+Android-only automation/overlay and protected-capture features are not ported.
+
 ## Download and Install
 
-[⬇️ **Download the latest ScreenKit v2.0.0 APK**](https://github.com/sharthak18/ScreenKit/releases/latest/download/ScreenKit.apk)
+[⬇️ **Download the latest ScreenKit v2.2.0 APK**](https://github.com/sharthak18/ScreenKit/releases/latest/download/ScreenKit.apk)
 
-- **Current Version**: `v2.0.0` (`versionCode = 7`)
+- **Current Version**: `v2.2.0` (`versionCode = 11`)
 - Compatible with **Android 7.0 (API 24) to Android 15 (API 35)**.
 - Device Audio & Mixed (`Mic + Device`) playback capture supported on **Android 10+**.
 - Full screen scope and single-app exclusion selection supported on **Android 14+**.
@@ -16,7 +24,97 @@ A native, high-performance Android capture, creator studio & screen automation s
 
 ---
 
-## What's New in v2.0.0 (13 Major Features)
+## New in v2.2.0 — optional network ad filtering
+
+Open **Network ad filtering → Set up filtering** in ScreenKit. Read the disclosure,
+allow the Android VPN request, and leave floating controls running. After this opt-in,
+filtering automatically starts with the floating service (even over other apps), and
+closing the bubble stops it. **Turn off** in the card or notification also disables
+future automatic starts. This is **not** Android's Always-on VPN/lockdown mode.
+
+- A DNS-only, local split VPN routes **only its virtual DNS address**. Normal web/video
+  traffic stays on the underlying network; no general traffic tunnel, root, installed
+  certificate, HTTP interception, or TLS decryption of other apps.
+- A small bundled starter list blocks known advertising domains and their subdomains.
+  It is deliberately **not comprehensive** and does not fetch remote lists or updates.
+  Allowed questions go to **Cloudflare DNS over TLS** (port 853, system certificate and
+  hostname validation). Cloudflare receives those domains and the device's public IP;
+  [its resolver privacy policy](https://developers.cloudflare.com/1.1.1.1/privacy/public-dns-resolver/)
+  applies. ScreenKit logs/saves no names or DNS history. Counts are in-memory per session.
+- Only one VPN can run. ScreenKit won't automatically replace another VPN. Strict Android
+  Private DNS must be turned off first; apps using custom DNS/DoH can bypass the filter.
+  IPv6 application traffic is left alone; ordinary AAAA queries through the virtual DNS
+  resolver can still be filtered. IPv6-only upstream uses Cloudflare's IPv6 address.
+- It **cannot promise removal of YouTube/Facebook/Instagram video ads**, same-host ads,
+  cached/preloaded ads or apps' own encrypted DNS. Domain filtering can break a site/app;
+  use Turn off to restore normal DNS. "Queries blocked" does not mean "ads removed".
+- Repeated upstream failures close the VPN and restore normal networking (**fail open**).
+  No automatic restart loop. Open the card to retry. Android permission revocation turns
+  the preference off. No boot receiver or Android Always-on/lockdown support.
+- Adds `ACCESS_NETWORK_STATE` and the system-protected VPN service; consent is never
+  requested silently. Notification shows activity and a Turn off action (if notifications
+  are allowed). Build/tests do not substitute for real-device network testing.
+
+See [architecture, limitations and device tests](docs/android-dns-filter.md).
+
+## Updated in v2.1.2
+
+- Removed **Zoom** from the floating menu; the underlying magnifier is not deleted.
+  **Long SS** remains on the third row.
+- Smart playback now looks for the button immediately around visible **Skip ad** text
+  when the text itself is not clickable. Searches remain package-scoped, visible-only,
+  time-bounded, and reject scrollable/broad ancestor containers.
+- Ad breaks require two seconds of stable ad-label absence before restarting the content
+  timer. Brief gaps between consecutive ads do not spend the next video's viewing time.
+  Hold or an unknown foreground window restarts this confirmation.
+- No root, VPN, DNS interception, TLS interception, or new permissions added. This is
+  visible-control assistance, **not universal ad blocking**. Network filters can block
+  separate ad domains but cannot reliably separate ads and video on shared endpoints.
+- Automated policy tests cover ad-pod flicker, resumed-content timing, interrupted
+  confirmation, and skip cooldown. Social-app/device behavior still requires physical testing.
+
+## Fixed in v2.1.1
+
+- **Floating Long Screenshot:** open the bubble and tap **Long SS** on its third row.
+  Enable the ScreenKit Accessibility service first. Capture hides overlays, stops automatic
+  scrolling, and samples up to three settled screens (or stops when the page does not change).
+  Long-image stitching is approximate on sticky/dynamic layouts, not guaranteed seamless.
+- **Real Zoom feed:** Zoom now asks for Android whole-screen sharing and reads fresh screen
+  pixels up to 5 times/second. Drag the panel; the sample target is 20dp below it (outside
+  the magnifier itself). The 3× loupe and color sample use this live feed, not a saved image
+  or generated colors. The feed is scaled to a 1600px long edge for memory use; sampled
+  colors are from that scaled feed. Close Zoom or its notification to release capture.
+  No pixels are saved or sent anywhere. Rotate/reopen Zoom to realign coordinates.
+  Zoom is exclusive with recording, broadcasting, and screenshots. Protected screens may
+  remain black. Color-trigger clicks now wait rather than fire when live pixels are unavailable.
+- **Custom scroll delay:** **Custom seconds / Smart playback** is available in the app and
+  floating Auto Scroll settings. Enter **0.2–3600 seconds** (including decimals), e.g.
+  30, 90, 300 or 900. The first item receives the same viewing delay. Session duration is
+  separate: choose **Infinite** if you want a delay longer than the total run time.
+- **Smart playback (experimental, opt-in):** while Auto Scroll runs, reads visible
+  accessibility controls in YouTube, Instagram, Facebook/Facebook Lite. Explicit
+  sponsored-feed labels can advance the feed; visible **Skip ad** buttons can be used;
+  recognised in-video ad/countdown labels hold scrolling until the ad finishes. Exposed
+  playback progress can advance on video end/loop instead of repeating a short video.
+  The timer restarts after an ad when playback information is unavailable. **Hold/Resume**
+  and **Next** are always available on the running scroll bar.
+- **Limits:** no bypass of unskippable ads; no guarantee of detecting every app version,
+  language, ad format, or hidden player timeline. When progress is unavailable, the banner
+  explicitly says **timed fallback**. Unsupported apps do not auto-swipe in Smart mode;
+  use Timed mode there. Manual Hold/Next handles cases the app cannot observe.
+- **Privacy:** the Accessibility service now declares window-content retrieval for Smart
+  mode. Inspection is opt-in, limited to visible controls while automation runs, and bounded
+  to a small node/time budget. No text is logged, persisted or sent. After updating, re-enable
+  ScreenKit in Android Accessibility if the new capability is not active.
+- Fixed a separate service-action dispatch bug that rejected the Go Live start action.
+
+## What's New in v2.1.0
+
+**Go Live** adds RTMP/RTMPS screen streaming with quality settings, microphone/device/mixed audio,
+live timer and outgoing bitrate, mute/end controls, and private in-memory stream keys.
+See [Go Live setup](#go-live--v210) below.
+
+## Included from v2.0.0 (13 Major Features)
 
 1. **Touch Macro Recorder ("Record My Actions & Replay")**: Tap `● Macro` in the Auto tool, press `● Rec`, perform any real-time sequence of finger taps and swipes across the screen, tap `■ Done`, and replay your exact touch choreography (`1×` to `Infinite ∞`).
 2. **Saved Auto-Clicker Profiles & Presets (Slots 1–3)**: Save and load named pin positions, delays, speeds, and modes into 3 instant profile slots (pre-loaded with **TikTok/Reels Scroll**, **Game Farming 1→4**, and **Reader Slow Scroll**).
@@ -142,3 +240,52 @@ A native, high-performance Android capture, creator studio & screen automation s
 ## License
 
 This project is licensed under the Apache License 2.0. See the LICENSE file for details.
+
+## Go Live — v2.1.0
+
+ScreenKit can send your **screen** as H.264 video and AAC audio to a single RTMP/RTMPS
+server. This is an encoder connection, not YouTube/Facebook OAuth or a guarantee
+that your account has live-streaming access.
+
+1. In YouTube Live Control Room, Facebook Live Producer, or another compatible
+   platform, create a live broadcast and select streaming/encoder software.
+2. In ScreenKit's **Go Live** card choose a destination. Paste the exact **server
+   URL** and **stream key** from that platform as separate fields. Presets are
+   editable starting points. Prefer `rtmps://` (TLS) over unencrypted `rtmp://`.
+3. Choose 480p/720p/1080p, 24/30/60 fps, a video bitrate (500–12000 kbps), and sound:
+   off, microphone, device audio, or mixed. Resolution preserves screen aspect ratio,
+   does not upscale, and is capped at a 1920-pixel long edge; actual frame rate depends
+   on your device and screen updates. A good starting point is 720p / 30 fps / 2500 kbps.
+4. Enable Do Not Disturb, tap **Go Live**, review the privacy warning, and approve
+   Android screen sharing. Everything visible in the chosen screen/app can be sent,
+   including overlays and notifications. Protected/DRM content cannot be streamed.
+5. Wait for **LIVE · Sending to server**, then check the platform's preview. You may
+   need to click **Go Live** there to make it public. ScreenKit's timer and outgoing
+   bitrate describe the encoder connection, not viewer count or public visibility.
+6. **Mute audio** silences both microphone and device sound while preserving the AAC
+   track; unmute restores the sources chosen at startup. Use **End stream**, the
+   floating red LIVE bubble's Stop control, or the capture notification to stop.
+   Android's stop-sharing action and enabled shake/volume stop shortcuts also stop it.
+
+### Streaming limitations and privacy
+
+- Screen streaming is exclusive with screen recording, screenshots, and camera recording.
+  This version does not save a simultaneous local MP4, stream the camera as a separate source,
+  or send to multiple destinations at once. A visible camera overlay can appear in screen sharing.
+- Sound sources are selected before starting. Device playback capture needs Android 10+
+  and a source app that permits it. Denying audio permission gives a silent stream.
+- Watermarks and the teleprompter are ordinary screen overlays: if included in the shared
+  screen, viewers see them too. They are not private presenter-only layers.
+- Keys/destinations are held in process memory only, not saved in preferences, bundles,
+  backups, or analytics. The key field is masked and cleared when starting. Re-enter the key
+  for the next broadcast. Never share keys in screenshots, bug reports, or chat.
+- A 25-second connection timeout, bounded outgoing queue, and server disconnect/error
+  handling end failed sessions and release screen/audio capture. Reconnection is manual;
+  no stream silently restarts after a process death or network failure.
+- Network throughput, thermal limits, codec support, and platform account eligibility affect
+  compatibility. Test with a private/unlisted broadcast before going public.
+
+Transport uses the Apache-2.0 licensed [RootEncoder RTMP module, version 2.5.3](https://github.com/pedroSG94/RootEncoder/tree/2.5.3/rtmp),
+vendored as source for reproducible builds, with TLS hostname verification, credential-safe logging,
+and disconnect handling patches documented in `third_party/rootencoder/README.md`. ScreenKit reuses its own
+MediaCodec screen encoder and mixed-audio capture pipeline; streaming does not write a temporary MP4.

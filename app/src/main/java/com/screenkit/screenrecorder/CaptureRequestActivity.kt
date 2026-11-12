@@ -129,8 +129,9 @@ class CaptureRequestActivity : ComponentActivity() {
                 finishSafely()
             }
             CaptureContract.COMMAND_TOGGLE_MAGNIFIER -> {
-                CreatorToolsOverlay.toggleMagnifier(this)
-                finishSafely()
+                if (CreatorToolsOverlay.isMagnifierShowing) {
+                    CreatorToolsOverlay.hideMagnifier(); finishSafely()
+                } else requestScreenCapture(CaptureContract.MODE_MAGNIFIER)
             }
             CaptureContract.COMMAND_TOGGLE_WATERMARK -> {
                 CreatorToolsOverlay.toggleWatermark(this)
@@ -254,7 +255,17 @@ class CaptureRequestActivity : ComponentActivity() {
     }
 
     private fun continueScreenCapture(mode: String) {
-        if ((mode == CaptureContract.MODE_SCREEN_RECORDING || mode == CaptureContract.MODE_PARTIAL_SCREEN_RECORDING) &&
+        if (ScreenCaptureService.isActive || com.screenkit.screenrecorder.services.MagnifierCaptureService.active) {
+            FloatingOverlayService.setHiddenForScreenshot(this, false)
+            CaptureIntents.toast(this, "Stop the current screen capture or close Zoom first.")
+            finishSafely(); return
+        }
+        if (mode == CaptureContract.MODE_LONG_SCREENSHOT && com.screenkit.screenrecorder.services.ScreenKitAutoService.instance == null) {
+            FloatingOverlayService.setHiddenForScreenshot(this, false)
+            CaptureIntents.toast(this, "Enable ScreenKit Auto Click & Scroll in Accessibility for Long Screenshot.")
+            finishSafely(); return
+        }
+        if ((mode == CaptureContract.MODE_MAGNIFIER || mode == CaptureContract.MODE_SCREEN_RECORDING || mode == CaptureContract.MODE_PARTIAL_SCREEN_RECORDING) &&
             CameraCaptureService.isRecording
         ) {
             FloatingOverlayService.setHiddenForScreenshot(this, false)
@@ -262,13 +273,13 @@ class CaptureRequestActivity : ComponentActivity() {
             finishSafely()
             return
         }
-        if (!CaptureIntents.canWriteExternalStorage(this)) {
+        if (mode != CaptureContract.MODE_MAGNIFIER && !CaptureIntents.canWriteExternalStorage(this)) {
             FloatingOverlayService.setHiddenForScreenshot(this, false)
             CaptureIntents.toast(this, "Storage permission is needed to save captures on this Android version.")
             finishSafely()
             return
         }
-        val consent = CaptureIntents.projectionConsentIntent(this)
+        val consent = CaptureIntents.projectionConsentIntent(this, wholeDisplay = mode == CaptureContract.MODE_MAGNIFIER)
         if (consent == null) {
             FloatingOverlayService.setHiddenForScreenshot(this, false)
             CaptureIntents.toast(this, "Screen capture is not available on this device.")

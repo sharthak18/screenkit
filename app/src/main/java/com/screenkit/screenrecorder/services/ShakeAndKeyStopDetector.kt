@@ -67,7 +67,7 @@ internal object ShakeAndKeyStopDetector : SensorEventListener {
             }
             if (screenRecRunning) {
                 CaptureIntents.stopScreenCapture(ctx)
-                CaptureIntents.toast(ctx, "Shake detected: Saving screen recording…")
+                CaptureIntents.toast(ctx, if (ScreenCaptureService.isLive) "Shake detected: ending live stream…" else "Shake detected: Saving screen recording…")
             }
         } else {
             firstPeakAtMs = now

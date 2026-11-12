@@ -14,8 +14,8 @@ android {
         applicationId = "com.screenkit.screenrecorder"
         minSdk = 24
         targetSdk = 34
-        versionCode = 7
-        versionName = "2.0.0"
+        versionCode = 11
+        versionName = "2.2.0"
     }
 
     compileOptions {
@@ -31,6 +31,9 @@ android {
 }
 
 dependencies {
+    // Transport only; reuse ScreenKit's H.264/AAC screen and mixed-audio encoders.
+    implementation(project(":stream-rtmp"))
+    testImplementation("junit:junit:4.13.2")
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.compose.ui:ui")
