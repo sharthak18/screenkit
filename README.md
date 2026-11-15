@@ -1,4 +1,4 @@
-# ScreenKit (v2.2.0)
+# ScreenKit (v2.2.1)
 
 A native, high-performance Android capture, creator studio & screen automation suite built with Modern Android Architecture (Jetpack Compose, CameraX, Foreground Services, Accessibility Gesture Engine, MediaProjection, OpenGL ES, MediaMuxer/MediaExtractor, and MediaCodec). ScreenKit v2.1.0 adds **Go Live screen streaming to YouTube, Facebook, and custom RTMP/RTMPS destinations** alongside screen recording with **Pause & Resume**, custom area cropping, **Scrolling Long Screenshots ("Stitch Full Page")**, built-in **MP4 Video Trimmer, Animated GIF Maker & PNG Frame Extractor**, sequential multi-target **Auto Clicking (`1 → 2 → 3 → 4…`)**, directional **Auto Scrolling (`↑ / ↓ / ← / →`)**, **Touch Macro Recorder & Replay**, **Saved Auto-Clicker Profiles (Slots 1–3)**, **Anti-Detection Human Jitter**, **Smart Color / Pixel Trigger (`#HEX`)**, **Floating Teleprompter**, **On-Screen Magnifier Loupe & Color Eyedropper**, **Creator Watermark Badge**, **Shake / Volume-Down Emergency Stop**, **Live Usage Analytics & One-Tap In-App Updater**, live interactive brush annotation, on-screen touch visualization, a draggable floating camera lens, amplified sound recording (Mic / Device Audio / Mixed), and a built-in Black-Screen Bypass Web Capture Browser.
 
@@ -14,15 +14,38 @@ Android-only automation/overlay and protected-capture features are not ported.
 
 ## Download and Install
 
-[⬇️ **Download the latest ScreenKit v2.2.0 APK**](https://github.com/sharthak18/ScreenKit/releases/latest/download/ScreenKit.apk)
+[⬇️ **Download the latest ScreenKit v2.2.1 APK**](https://github.com/sharthak18/ScreenKit/releases/latest/download/ScreenKit.apk)
 
-- **Current Version**: `v2.2.0` (`versionCode = 11`)
+- **Current Version**: `v2.2.1` (`versionCode = 12`)
 - Compatible with **Android 7.0 (API 24) to Android 15 (API 35)**.
 - Device Audio & Mixed (`Mic + Device`) playback capture supported on **Android 10+**.
 - Full screen scope and single-app exclusion selection supported on **Android 14+**.
 - On Android, open the downloaded APK and follow the system prompt. Allow "Install unknown apps" for your browser or file manager if prompted.
 
 ---
+
+## Fixed in v2.2.1 — floating controls and simpler live setup
+
+- **Facecam** and **Flip** are back in the floating menu's third row, alongside Long SS,
+  Badge, and a new **Go Live** shortcut. Facecam toggles the floating camera preview;
+  Flip changes front/back without opening the app. Flipping during a separate camera-file
+  recording remains blocked; refusing it no longer changes the saved camera selection.
+- The bubble's collapsed anchor is separate from the expanded menu window. Expanding,
+  collapsing, and capture-state refreshes no longer overwrite its right-edge position.
+  Rotation preserves its docked side; dragging keeps the touched view attached until
+  release. Cancelled gestures no longer close or expand the bubble. Narrow screens can
+  horizontally scroll the menu instead of clipping controls.
+- **Go Live → platform chooser** now offers YouTube, Facebook, TikTok, and Custom.
+  Platform guidance and an **Open platform** app/browser hand-off come before stream-key
+  entry. Advanced encoder settings are hidden by default. The floating Go Live shortcut
+  opens this same chooser directly.
+- **Not account linking:** opening a platform does not authenticate ScreenKit or start
+  a screen broadcast there. This build still needs a server URL/stream key from an eligible
+  account. TikTok needs streaming-software access; no ingest URL or eligibility is invented.
+  One-tap OAuth/publishing requires registered platform integrations and approved API
+  permissions; those are not configured here. No platform passwords or OAuth tokens are collected.
+- Geometry/platform tests added; real-device overlay gestures, camera switching, and
+  platform app/browser behavior still require validation. See `docs/android-2.2.1-testing.md`.
 
 ## New in v2.2.0 — optional network ad filtering
 

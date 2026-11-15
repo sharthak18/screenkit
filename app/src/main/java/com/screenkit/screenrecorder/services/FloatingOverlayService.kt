@@ -27,6 +27,8 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
+import com.screenkit.screenrecorder.ui.overlay.BubblePlacement
+import android.widget.HorizontalScrollView
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -75,6 +77,12 @@ class FloatingOverlayService : Service() {
         }
     }
     private var expanded = false
+    private var bubbleAnchorX = 0
+    private var bubbleAnchorY = 0
+    private var dockedRight = false
+    private var bubbleGestureActive = false
+    private var rebuildPending = false
+    private var currentPlacement: BubblePlacement.Layout? = null
     private var screenRecording = false
     private var cameraRecording = false
     private var cameraPreview = false
@@ -315,6 +323,8 @@ class FloatingOverlayService : Service() {
             x = dp(8)
             y = dp(240)
         }
+        bubbleAnchorX = params.x
+        bubbleAnchorY = params.y
         overlayParams = params
         val root = LinearLayout(this)
         overlayRoot = root
@@ -337,11 +347,16 @@ class FloatingOverlayService : Service() {
     }
 
     private fun rebuildOverlay() {
+        // State broadcasts must not detach the view that owns the current touch stream.
+        if (bubbleGestureActive) { rebuildPending = true; return }
+        rebuildPending = false
         val root = overlayRoot ?: return
         val params = overlayParams ?: return
         val manager = windowManager ?: return
-        val metrics = realDisplayMetrics()
-        val beforeWidth = root.width
+        snapAnimator?.end()
+        snapAnimator = null
+        val placement = placement()
+        currentPlacement = placement
         mainHandler.removeCallbacks(liveTicker)
         liveStatusLabel = null
         root.removeAllViews()
@@ -364,13 +379,16 @@ class FloatingOverlayService : Service() {
         }
 
         val bubble = makeBubble()
-        val menu = if (expanded) makeMenu() else null
-        val placeMenuBeforeBubble = expanded && params.x > metrics.widthPixels / 2
+        val menu = if (expanded) HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = true
+            addView(makeMenu())
+        } else null
+        val placeMenuBeforeBubble = expanded && placement.menuBeforeBubble
         if (placeMenuBeforeBubble && menu != null) {
             root.addView(
                 menu,
                 LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    placement.menuWidth,
                     dp(CELL_HEIGHT_DP * 3 + if (ScreenCaptureService.isLive) 24 else 0),
                 ),
             )
@@ -386,7 +404,7 @@ class FloatingOverlayService : Service() {
                 root.addView(
                     menu,
                     LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        placement.menuWidth,
                         dp(CELL_HEIGHT_DP * 3 + if (ScreenCaptureService.isLive) 24 else 0),
                     ).apply { leftMargin = dp(4) },
                 )
@@ -394,15 +412,10 @@ class FloatingOverlayService : Service() {
         }
         bubble.setOnTouchListener(makeBubbleTouchListener(root, params))
 
-        if (beforeWidth > 0 || expanded) {
-            val estimatedWidth = if (expanded) {
-                dp(BUBBLE_DP + 4 + CELL_WIDTH_DP * COLUMNS + 8)
-            } else {
-                dp(BUBBLE_DP)
-            }
-            val maxX = (metrics.widthPixels - estimatedWidth).coerceAtLeast(0)
-            params.x = params.x.coerceIn(0, maxX)
-        }
+        params.width = placement.width
+        params.height = placement.height
+        params.x = placement.x
+        params.y = placement.y
 
         if (isTemporarilyHiddenForScreenshot) {
             root.visibility = View.GONE
@@ -412,6 +425,13 @@ class FloatingOverlayService : Service() {
             root.alpha = if (expanded || screenRecording || cameraRecording) 1f else 0.9f
         }
         runCatching { manager.updateViewLayout(root, params) }
+    }
+
+    private fun placement(menuBeforeBubble: Boolean? = null): BubblePlacement.Layout {
+        val metrics = realDisplayMetrics()
+        return BubblePlacement.layout(bubbleAnchorX, bubbleAnchorY, metrics.widthPixels, metrics.heightPixels,
+            dp(BUBBLE_DP), dp(CELL_WIDTH_DP * COLUMNS), dp(CELL_HEIGHT_DP * 3 + if (ScreenCaptureService.isLive) 24 else 0),
+            dp(4), dp(4), expanded, menuBeforeBubble)
     }
 
     private fun makeBubble(): FrameLayout {
@@ -479,7 +499,7 @@ class FloatingOverlayService : Service() {
     }
 
     /**
-     * Compact 2x7 grid of quick actions including Brush, Show Touch, Auto Click (1→2→3),
+     * Compact three-row grid of quick actions including Brush, Show Touch, Auto Click (1→2→3),
      * Auto Scroll (↑/↓), Crop/Full Screenshot & Record, Camera Lens, Flip, Sound, and Web Bypass.
      */
     private fun makeMenu(): LinearLayout {
@@ -552,6 +572,9 @@ class FloatingOverlayService : Service() {
             listOf(
                 MenuAction("⇣", "Long SS", CaptureContract.COMMAND_LONG_SCREENSHOT, false),
                 MenuAction("©", "Badge", CaptureContract.COMMAND_TOGGLE_WATERMARK, CreatorToolsOverlay.isWatermarkShowing),
+                MenuAction("◉", "Facecam", CaptureContract.COMMAND_TOGGLE_CAMERA_OVERLAY, cameraPreview),
+                MenuAction("↻", "Flip", CaptureContract.COMMAND_FLIP_CAMERA, SettingsStore.cameraFront(this)),
+                MenuAction("●", "Go Live", CaptureContract.COMMAND_OPEN_LIVE, ScreenCaptureService.isLive),
             ),
         )
         rows.forEach { actions ->
@@ -662,6 +685,10 @@ class FloatingOverlayService : Service() {
         }
 
         when (command) {
+            CaptureContract.COMMAND_OPEN_LIVE -> {
+                openMain(live = true)
+                return
+            }
             CaptureContract.COMMAND_OPEN_APP -> {
                 openMain()
                 return
@@ -796,6 +823,10 @@ class FloatingOverlayService : Service() {
     }
 
     private fun flipCamera() {
+        if (CameraCaptureService.isRecording) {
+            CaptureIntents.toast(this, "Stop camera recording before switching cameras. Screen recording with Facecam can stay on.")
+            return
+        }
         val front = !SettingsStore.cameraFront(this)
         SettingsStore.setCameraFront(this, front)
         val label = if (front) "Front camera" else "Back camera"
@@ -827,13 +858,14 @@ class FloatingOverlayService : Service() {
         stopSelf()
     }
 
-    private fun openMain() {
+    private fun openMain(live: Boolean = false) {
         val intent = Intent(this, MainActivity::class.java)
             .addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
                     Intent.FLAG_ACTIVITY_CLEAR_TOP or
                     Intent.FLAG_ACTIVITY_SINGLE_TOP,
             )
+        if (live) intent.putExtra(CaptureContract.EXTRA_OPEN_LIVE, true)
         runCatching { startActivity(intent) }
     }
 
@@ -975,9 +1007,13 @@ class FloatingOverlayService : Service() {
             TouchFeedbackOverlay.recordTouchEvent(event)
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    snapAnimator?.cancel()
-                    startX = params.x
-                    startY = params.y
+                    snapAnimator?.end()
+                    snapAnimator = null
+                    root.animate().cancel()
+                    bubbleGestureActive = true
+                    root.scaleX = 1f; root.scaleY = 1f
+                    startX = params.x + (currentPlacement?.bubbleOffsetX ?: 0)
+                    startY = params.y + (currentPlacement?.bubbleOffsetY ?: 0)
                     downRawX = event.rawX
                     downRawY = event.rawY
                     dragging = false
@@ -990,10 +1026,7 @@ class FloatingOverlayService : Service() {
                     if (abs(dx) > slop || abs(dy) > slop) {
                         if (!dragging) {
                             dragging = true
-                            if (expanded) {
-                                expanded = false
-                                rebuildOverlay()
-                            }
+                            // Keep the touched view attached until UP/CANCEL, otherwise Android cancels the drag.
                             showRemoveTarget()
                         }
                     }
@@ -1019,27 +1052,33 @@ class FloatingOverlayService : Service() {
 
                         if (inBottomCloseZone) {
                             // Messenger-style magnetic snap into the center of the bottom ✕ circle!
-                            params.x = targetCenterX - bubblePx / 2
-                            params.y = targetCenterY - bubblePx / 2
+                            bubbleAnchorX = targetCenterX - bubblePx / 2
+                            bubbleAnchorY = targetCenterY - bubblePx / 2
                         } else {
                             val maxX = (screenWidth - bubblePx).coerceAtLeast(0)
                             val maxY = (screenHeight - bubblePx).coerceAtLeast(dp(24))
-                            params.x = (startX + dx).coerceIn(0, maxX)
-                            params.y = (startY + dy).coerceIn(dp(24), maxY)
+                            bubbleAnchorX = (startX + dx).coerceIn(0, maxX)
+                            bubbleAnchorY = (startY + dy).coerceIn(dp(24), maxY)
                         }
+                        val position = placement(currentPlacement?.menuBeforeBubble)
+                        currentPlacement = position
+                        params.x = position.x; params.y = position.y
                         runCatching { windowManager?.updateViewLayout(root, params) }
                     }
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    bubbleGestureActive = false
                     if (dragging) {
-                        val closedByDrag = isOverRemoveTarget
+                        val closedByDrag = event.actionMasked == MotionEvent.ACTION_UP && isOverRemoveTarget
                         hideRemoveTarget {
                             if (closedByDrag) {
                                 animateBubbleDismiss(root)
                             }
                         }
                         if (!closedByDrag) {
+                            expanded = false
+                            rebuildOverlay()
                             val metrics = realDisplayMetrics()
                             val screenWidth = metrics.widthPixels
                             val bubblePx = dp(BUBBLE_DP)
@@ -1047,8 +1086,10 @@ class FloatingOverlayService : Service() {
                             val targetX = if (params.x + bubblePx / 2 < screenWidth / 2) 0 else maxX
                             animateSnapToEdge(root, params, targetX)
                         }
-                    } else {
+                    } else if (event.actionMasked == MotionEvent.ACTION_UP) {
                         toggleExpandedWithAnimation(root)
+                    } else if (rebuildPending) {
+                        rebuildOverlay()
                     }
                     true
                 }
@@ -1058,13 +1099,15 @@ class FloatingOverlayService : Service() {
     }
 
     private fun animateSnapToEdge(root: View, params: WindowManager.LayoutParams, targetX: Int) {
-        val startX = params.x
+        val startX = bubbleAnchorX
+        dockedRight = targetX > 0
         snapAnimator?.cancel()
         val animator = android.animation.ValueAnimator.ofInt(startX, targetX).apply {
             duration = 220
-            interpolator = android.view.animation.OvershootInterpolator(0.8f)
+            interpolator = android.view.animation.DecelerateInterpolator()
             addUpdateListener { va ->
-                params.x = va.animatedValue as Int
+                bubbleAnchorX = va.animatedValue as Int
+                params.x = bubbleAnchorX
                 runCatching { windowManager?.updateViewLayout(root, params) }
             }
         }
@@ -1088,45 +1131,23 @@ class FloatingOverlayService : Service() {
     }
 
     private fun toggleExpandedWithAnimation(root: View) {
-        if (!expanded) {
-            expanded = true
-            rebuildOverlay()
-            root.alpha = 0f
-            root.scaleX = 0.88f
-            root.scaleY = 0.88f
-            root.animate()
-                .alpha(1f)
-                .scaleX(1f)
-                .scaleY(1f)
-                .setDuration(160)
-                .setInterpolator(android.view.animation.DecelerateInterpolator())
-                .start()
-        } else {
-            root.animate()
-                .alpha(0.6f)
-                .scaleX(0.92f)
-                .scaleY(0.92f)
-                .setDuration(110)
-                .withEndAction {
-                    expanded = false
-                    rebuildOverlay()
-                    root.scaleX = 1f
-                    root.scaleY = 1f
-                }
-                .start()
-        }
+        root.animate().cancel()
+        expanded = !expanded
+        rebuildOverlay()
+        root.scaleX = 1f; root.scaleY = 1f
+        root.alpha = 0.8f
+        root.animate().alpha(1f).setDuration(120).start()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        val root = overlayRoot ?: return
-        val params = overlayParams ?: return
+        bubbleGestureActive = false
+        hideRemoveTarget()
+        snapAnimator?.cancel(); snapAnimator = null
         val metrics = realDisplayMetrics()
-        val width = metrics.widthPixels
-        val height = metrics.heightPixels
-        params.x = params.x.coerceIn(0, (width - dp(BUBBLE_DP)).coerceAtLeast(0))
-        params.y = params.y.coerceIn(dp(24), (height - dp(BUBBLE_DP) - dp(24)).coerceAtLeast(dp(24)))
-        runCatching { windowManager?.updateViewLayout(root, params) }
+        bubbleAnchorX = if (dockedRight) (metrics.widthPixels - dp(BUBBLE_DP)).coerceAtLeast(0) else 0
+        bubbleAnchorY = bubbleAnchorY.coerceIn(0, (metrics.heightPixels - dp(BUBBLE_DP)).coerceAtLeast(0))
+        expanded = false
         rebuildOverlay()
     }
 
