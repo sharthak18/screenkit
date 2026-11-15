@@ -109,6 +109,7 @@ internal fun ScreenKitTheme(content: @Composable () -> Unit) {
 @Composable
 internal fun MainScreen(
     state: CaptureUiState,
+    liveSetupRequest: Int = 0,
     showOverlayWelcome: Boolean,
     onDismissOverlayWelcome: () -> Unit,
     onEnableOverlay: () -> Unit,
@@ -193,6 +194,7 @@ internal fun MainScreen(
                 AdBlockCard()
 
                 LiveStreamCard(
+                    setupRequest = liveSetupRequest,
                     busy = state.screenSessionActive || state.cameraRecording,
                     audioMode = state.audioMode,
                     onAudioMode = onAudioModeSelected,

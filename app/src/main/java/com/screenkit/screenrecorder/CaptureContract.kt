@@ -2,6 +2,8 @@ package com.screenkit.screenrecorder
 
 /** Explicit app-private intents shared by the activity, capture services and overlay. */
 object CaptureContract {
+    const val EXTRA_OPEN_LIVE = "screenkit.open_live"
+    const val COMMAND_OPEN_LIVE = "open_live"
     const val EXTRA_ACTIVE = "screenkit.active"
     const val EXTRA_RECORDING = "screenkit.recording"
     const val EXTRA_PAUSED = "screenkit.paused"

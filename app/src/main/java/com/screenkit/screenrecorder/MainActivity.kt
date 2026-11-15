@@ -69,6 +69,7 @@ class MainActivity : ComponentActivity() {
     private var screenshotFlowPending = false
     private var receiverRegistered = false
     private var showOverlayWelcome by mutableStateOf(false)
+    private var liveSetupRequest by mutableStateOf(0)
 
     private val permissionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -226,10 +227,12 @@ class MainActivity : ComponentActivity() {
         refreshStorageSnapshot()
         syncServiceStates()
         refreshGitHubStats()
+        consumeLiveSetupIntent(intent)
         setContent {
             val state = viewModel.state.collectAsStateWithLifecycle().value
             MainScreen(
                 state = state,
+                liveSetupRequest = liveSetupRequest,
                 showOverlayWelcome = showOverlayWelcome,
                 onDismissOverlayWelcome = {
                     showOverlayWelcome = false
@@ -502,11 +505,19 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        consumeLiveSetupIntent(intent)
         refreshPermissionSnapshot()
         refreshStorageSnapshot()
         syncServiceStates()
         if (Settings.canDrawOverlays(this) && !screenshotFlowPending && !overlaySettingsPending) {
             ensureFloatingOverlayVisible()
+        }
+    }
+
+    private fun consumeLiveSetupIntent(intent: Intent) {
+        if (intent.getBooleanExtra(CaptureContract.EXTRA_OPEN_LIVE, false)) {
+            liveSetupRequest++
+            intent.removeExtra(CaptureContract.EXTRA_OPEN_LIVE)
         }
     }
 
