@@ -27,6 +27,8 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
+import com.screenkit.screenrecorder.ui.overlay.BubbleGestureSession
+import com.screenkit.screenrecorder.ui.overlay.BubbleDismissTarget
 import com.screenkit.screenrecorder.ui.overlay.BubblePlacement
 import android.widget.HorizontalScrollView
 import android.widget.FrameLayout
@@ -80,7 +82,7 @@ class FloatingOverlayService : Service() {
     private var bubbleAnchorX = 0
     private var bubbleAnchorY = 0
     private var dockedRight = false
-    private var bubbleGestureActive = false
+    private val bubbleGesture = BubbleGestureSession()
     private var rebuildPending = false
     private var currentPlacement: BubblePlacement.Layout? = null
     private var screenRecording = false
@@ -348,7 +350,7 @@ class FloatingOverlayService : Service() {
 
     private fun rebuildOverlay() {
         // State broadcasts must not detach the view that owns the current touch stream.
-        if (bubbleGestureActive) { rebuildPending = true; return }
+        if (bubbleGesture.active) { rebuildPending = true; return }
         rebuildPending = false
         val root = overlayRoot ?: return
         val params = overlayParams ?: return
@@ -941,34 +943,29 @@ class FloatingOverlayService : Service() {
             manager.addView(target, params)
             removeTargetShown = true
             target.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(160).start()
-        }
+        }.onFailure { hideRemoveTarget() }
     }
 
-    private fun hideRemoveTarget(onHidden: (() -> Unit)? = null) {
-        if (!removeTargetShown) {
-            onHidden?.invoke()
-            return
-        }
+    private fun hideRemoveTarget() {
+        // Clear ownership first. An old animation must never remove a newer drag's target.
         val view = removeTargetView
-        val manager = windowManager
-        if (view != null && manager != null) {
-            view.animate().alpha(0f).scaleX(0.4f).scaleY(0.4f).setDuration(140).withEndAction {
-                runCatching { manager.removeView(view) }
-                removeTargetView = null
-                removeTargetCircle = null
-                removeTargetParams = null
-                removeTargetShown = false
-                isOverRemoveTarget = false
-                onHidden?.invoke()
-            }.start()
-        } else {
-            removeTargetView = null
-            removeTargetCircle = null
-            removeTargetParams = null
-            removeTargetShown = false
-            isOverRemoveTarget = false
-            onHidden?.invoke()
-        }
+        removeTargetView = null
+        removeTargetCircle = null
+        removeTargetParams = null
+        removeTargetShown = false
+        isOverRemoveTarget = false
+        view?.animate()?.cancel()
+        if (view != null) runCatching { windowManager?.removeView(view) }
+    }
+
+    private fun isInsideRemoveTarget(rawX: Float, rawY: Float): Boolean {
+        val circle = removeTargetCircle ?: return false
+        if (!removeTargetShown || !circle.isAttachedToWindow || circle.width <= 0 || circle.height <= 0) return false
+        val location = IntArray(2)
+        circle.getLocationOnScreen(location)
+        return BubbleDismissTarget.contains(rawX, rawY,
+            location[0] + circle.width / 2f, location[1] + circle.height / 2f,
+            minOf(circle.width, circle.height) / 2f + dp(12))
     }
 
     private fun updateRemoveTargetHover(hover: Boolean) {
@@ -1002,99 +999,76 @@ class FloatingOverlayService : Service() {
         var startY = 0
         var downRawX = 0f
         var downRawY = 0f
-        var dragging = false
-        return View.OnTouchListener { _, event ->
+        var touchToken = 0L
+        return View.OnTouchListener { touched, event ->
+            if (overlayRoot !== root || overlayParams !== params) return@OnTouchListener true
+            if (event.actionMasked != MotionEvent.ACTION_DOWN && !bubbleGesture.accepts(touchToken)) return@OnTouchListener true
             TouchFeedbackOverlay.recordTouchEvent(event)
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    snapAnimator?.end()
+                    if (!touched.isAttachedToWindow) return@OnTouchListener true
+                    touchToken = bubbleGesture.begin()
+                    snapAnimator?.cancel()
                     snapAnimator = null
                     root.animate().cancel()
-                    bubbleGestureActive = true
+                    hideRemoveTarget()
                     root.scaleX = 1f; root.scaleY = 1f
                     startX = params.x + (currentPlacement?.bubbleOffsetX ?: 0)
                     startY = params.y + (currentPlacement?.bubbleOffsetY ?: 0)
                     downRawX = event.rawX
                     downRawY = event.rawY
-                    dragging = false
                     root.alpha = 1f
-                    true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (event.rawX - downRawX).toInt()
                     val dy = (event.rawY - downRawY).toInt()
-                    if (abs(dx) > slop || abs(dy) > slop) {
-                        if (!dragging) {
-                            dragging = true
-                            // Keep the touched view attached until UP/CANCEL, otherwise Android cancels the drag.
-                            showRemoveTarget()
-                        }
+                    if (!bubbleGesture.dragging && (abs(dx) > slop || abs(dy) > slop)) {
+                        bubbleGesture.drag(touchToken)
+                        showRemoveTarget()
                     }
-                    if (dragging) {
+                    if (bubbleGesture.dragging) {
                         val metrics = realDisplayMetrics()
-                        val screenWidth = metrics.widthPixels
-                        val screenHeight = metrics.heightPixels
                         val bubblePx = dp(BUBBLE_DP)
-
-                        val targetCenterX = screenWidth / 2
-                        val targetCenterY =
-                            screenHeight - dp(REMOVE_TARGET_MARGIN_BOTTOM_DP + REMOVE_TARGET_SIZE_DP / 2)
-
-                        val fingerX = event.rawX.toInt()
-                        val fingerY = event.rawY.toInt()
-                        val distSq = (fingerX - targetCenterX) * (fingerX - targetCenterX) +
-                            (fingerY - targetCenterY) * (fingerY - targetCenterY)
-                        val captureRadius = dp(88)
-                        val inBottomCloseZone = distSq <= captureRadius * captureRadius ||
-                            (fingerY >= screenHeight - dp(125) && abs(fingerX - targetCenterX) <= dp(88))
-
-                        updateRemoveTargetHover(inBottomCloseZone)
-
-                        if (inBottomCloseZone) {
-                            // Messenger-style magnetic snap into the center of the bottom ✕ circle!
-                            bubbleAnchorX = targetCenterX - bubblePx / 2
-                            bubbleAnchorY = targetCenterY - bubblePx / 2
-                        } else {
-                            val maxX = (screenWidth - bubblePx).coerceAtLeast(0)
-                            val maxY = (screenHeight - bubblePx).coerceAtLeast(dp(24))
-                            bubbleAnchorX = (startX + dx).coerceIn(0, maxX)
-                            bubbleAnchorY = (startY + dy).coerceIn(dp(24), maxY)
-                        }
+                        val maxX = (metrics.widthPixels - bubblePx).coerceAtLeast(0)
+                        val maxY = (metrics.heightPixels - bubblePx).coerceAtLeast(0)
+                        bubbleAnchorX = (startX + dx).coerceIn(0, maxX)
+                        bubbleAnchorY = (startY + dy).coerceIn(0, maxY)
+                        updateRemoveTargetHover(isInsideRemoveTarget(event.rawX, event.rawY))
                         val position = placement(currentPlacement?.menuBeforeBubble)
                         currentPlacement = position
                         params.x = position.x; params.y = position.y
                         runCatching { windowManager?.updateViewLayout(root, params) }
                     }
-                    true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    bubbleGestureActive = false
-                    if (dragging) {
-                        val closedByDrag = event.actionMasked == MotionEvent.ACTION_UP && isOverRemoveTarget
-                        hideRemoveTarget {
-                            if (closedByDrag) {
-                                animateBubbleDismiss(root)
-                            }
-                        }
-                        if (!closedByDrag) {
+                    // Consume before detaching anything. removeAllViews() may synchronously send CANCEL
+                    // back into this listener; the old code recursively rebuilt the same ViewGroup.
+                    val end = bubbleGesture.finish(touchToken, event.actionMasked == MotionEvent.ACTION_CANCEL)
+                        ?: return@OnTouchListener true
+                    val dismiss = end.dragged && !end.cancelled && isInsideRemoveTarget(event.rawX, event.rawY)
+                    // Never mutate the touched hierarchy inside ViewGroup.dispatchTouchEvent().
+                    mainHandler.post {
+                        if (overlayRoot !== root || overlayParams !== params || !bubbleGesture.isCurrent(end)) return@post
+                        hideRemoveTarget()
+                        if (dismiss) {
+                            hideOverlay()
+                        } else if (end.dragged) {
                             expanded = false
                             rebuildOverlay()
-                            val metrics = realDisplayMetrics()
-                            val screenWidth = metrics.widthPixels
+                            val width = realDisplayMetrics().widthPixels
                             val bubblePx = dp(BUBBLE_DP)
-                            val maxX = (screenWidth - bubblePx).coerceAtLeast(0)
-                            val targetX = if (params.x + bubblePx / 2 < screenWidth / 2) 0 else maxX
+                            val maxX = (width - bubblePx).coerceAtLeast(0)
+                            val targetX = if (bubbleAnchorX + bubblePx / 2 < width / 2) 0 else maxX
                             animateSnapToEdge(root, params, targetX)
+                        } else if (!end.cancelled) {
+                            toggleExpandedWithAnimation(root)
+                        } else if (rebuildPending) {
+                            rebuildOverlay()
                         }
-                    } else if (event.actionMasked == MotionEvent.ACTION_UP) {
-                        toggleExpandedWithAnimation(root)
-                    } else if (rebuildPending) {
-                        rebuildOverlay()
                     }
-                    true
                 }
-                else -> true
             }
+            true
         }
     }
 
@@ -1106,6 +1080,7 @@ class FloatingOverlayService : Service() {
             duration = 220
             interpolator = android.view.animation.DecelerateInterpolator()
             addUpdateListener { va ->
+                if (overlayRoot !== root || overlayParams !== params || bubbleGesture.active) return@addUpdateListener
                 bubbleAnchorX = va.animatedValue as Int
                 params.x = bubbleAnchorX
                 runCatching { windowManager?.updateViewLayout(root, params) }
@@ -1116,18 +1091,6 @@ class FloatingOverlayService : Service() {
         if (!expanded && !screenRecording && !cameraRecording) {
             root.animate().alpha(0.9f).setDuration(220).start()
         }
-    }
-
-    private fun animateBubbleDismiss(root: View) {
-        root.animate()
-            .scaleX(0.1f)
-            .scaleY(0.1f)
-            .alpha(0f)
-            .setDuration(150)
-            .withEndAction {
-                hideOverlay()
-            }
-            .start()
     }
 
     private fun toggleExpandedWithAnimation(root: View) {
@@ -1141,7 +1104,7 @@ class FloatingOverlayService : Service() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        bubbleGestureActive = false
+        bubbleGesture.invalidate()
         hideRemoveTarget()
         snapAnimator?.cancel(); snapAnimator = null
         val metrics = realDisplayMetrics()
@@ -1194,6 +1157,9 @@ class FloatingOverlayService : Service() {
     }
 
     private fun removeOverlay() {
+        bubbleGesture.invalidate()
+        rebuildPending = false
+        overlayRoot?.animate()?.cancel()
         mainHandler.removeCallbacks(liveTicker)
         liveStatusLabel = null
         mainHandler.removeCallbacks(safetyRestoreRunnable)

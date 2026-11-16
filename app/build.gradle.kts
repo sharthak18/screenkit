@@ -14,8 +14,8 @@ android {
         applicationId = "com.screenkit.screenrecorder"
         minSdk = 24
         targetSdk = 34
-        versionCode = 12
-        versionName = "2.2.1"
+        versionCode = 13
+        versionName = "2.2.2"
     }
 
     compileOptions {
@@ -25,6 +25,7 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    testOptions { unitTests.isIncludeAndroidResources = true }
     buildFeatures {
         compose = true
     }
@@ -34,6 +35,7 @@ dependencies {
     // Transport only; reuse ScreenKit's H.264/AAC screen and mixed-audio encoders.
     implementation(project(":stream-rtmp"))
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.compose.ui:ui")

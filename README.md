@@ -1,4 +1,4 @@
-# ScreenKit (v2.2.1)
+# ScreenKit (v2.2.2)
 
 A native, high-performance Android capture, creator studio & screen automation suite built with Modern Android Architecture (Jetpack Compose, CameraX, Foreground Services, Accessibility Gesture Engine, MediaProjection, OpenGL ES, MediaMuxer/MediaExtractor, and MediaCodec). ScreenKit v2.1.0 adds **Go Live screen streaming to YouTube, Facebook, and custom RTMP/RTMPS destinations** alongside screen recording with **Pause & Resume**, custom area cropping, **Scrolling Long Screenshots ("Stitch Full Page")**, built-in **MP4 Video Trimmer, Animated GIF Maker & PNG Frame Extractor**, sequential multi-target **Auto Clicking (`1 → 2 → 3 → 4…`)**, directional **Auto Scrolling (`↑ / ↓ / ← / →`)**, **Touch Macro Recorder & Replay**, **Saved Auto-Clicker Profiles (Slots 1–3)**, **Anti-Detection Human Jitter**, **Smart Color / Pixel Trigger (`#HEX`)**, **Floating Teleprompter**, **On-Screen Magnifier Loupe & Color Eyedropper**, **Creator Watermark Badge**, **Shake / Volume-Down Emergency Stop**, **Live Usage Analytics & One-Tap In-App Updater**, live interactive brush annotation, on-screen touch visualization, a draggable floating camera lens, amplified sound recording (Mic / Device Audio / Mixed), and a built-in Black-Screen Bypass Web Capture Browser.
 
@@ -14,15 +14,31 @@ Android-only automation/overlay and protected-capture features are not ported.
 
 ## Download and Install
 
-[⬇️ **Download the latest ScreenKit v2.2.1 APK**](https://github.com/sharthak18/ScreenKit/releases/latest/download/ScreenKit.apk)
+[⬇️ **Download the latest ScreenKit v2.2.2 APK**](https://github.com/sharthak18/ScreenKit/releases/latest/download/ScreenKit.apk)
 
-- **Current Version**: `v2.2.1` (`versionCode = 12`)
+- **Current Version**: `v2.2.2` (`versionCode = 13`)
 - Compatible with **Android 7.0 (API 24) to Android 15 (API 35)**.
 - Device Audio & Mixed (`Mic + Device`) playback capture supported on **Android 10+**.
 - Full screen scope and single-app exclusion selection supported on **Android 14+**.
 - On Android, open the downloaded APK and follow the system prompt. Allow "Install unknown apps" for your browser or file manager if prompted.
 
 ---
+
+## Fixed in v2.2.2 — bubble drag/release crash path
+
+- Finish each touch stream exactly once **before** changing views. Rebuilding the bubble
+  during Android touch dispatch could synchronously send CANCEL back into the same
+  listener. Terminal view changes now run on the next main-loop turn, not inside dispatch.
+- New gestures and service teardown invalidate queued release/dismiss work. Old callbacks
+  cannot close a newer gesture or recreate a removed overlay. Cancel never means close.
+- Remove-target cleanup is immediate and ownership-safe; no delayed animation cleanup
+  from a previous drag. Close only on an UP within the visible target's circle plus a small
+  tolerance, not a broad bottom strip or stale hover flag. Failed target attachment disables dismissal.
+- Added Android ViewGroup/WindowManager dispatch regression tests using Robolectric on
+  API 28 and 34, alongside gesture-state and close-target tests. These exercise framework
+  behavior but are not physical-device or OEM overlay verification.
+- This addresses a concrete re-entrant drag/release path found in source. Without a device
+  crash trace it is not proof that every reported disappearance has the same cause.
 
 ## Fixed in v2.2.1 — floating controls and simpler live setup
 
